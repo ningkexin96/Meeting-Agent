@@ -1,6 +1,6 @@
 # Meeting Agent · 智能会议纪要 Agent（48h MVP）
 
-上传会议音频 → 真实 ASR 转写 → 声纹识别说话人 → Agent 编排生成结构化纪要 → **每条结论可回溯到原话**。
+上传会议音频或直接在会中录音 → 实时/离线 ASR 转写 → 声纹识别说话人 → Agent 编排生成结构化纪要 → **每条结论可回溯到原话**。
 
 > 这是「48 小时时间盒内的可演示 MVP」，不是生产系统。
 > 范围合同见 `../meeting-agent-demo/docs/02-mvp-scope.md`，架构说明见 `../meeting-agent-demo/docs/01-architecture.md`。
@@ -9,7 +9,7 @@
 
 ## 现在的状态
 
-- ✅ **75 项测试全通过**（`pnpm test:all`）
+- ✅ **142 项测试全通过**（`pnpm test:all`）
 - ✅ 生产构建通过（`pnpm build`）
 - ✅ 全链路可在 `MOCK_LLM=1` 下离线跑通，不依赖任何外部服务
 - ✅ 真实 ASR / 声纹 / 语义检索 / 模型四条外部依赖均已接入，填 `.env` 即可切换
@@ -21,6 +21,7 @@
 | **真实 ASR** | 支持 OpenAI（whisper 系）与 FunASR 两种上游，失败可降级 | #22 |
 | **声纹识别** | 注册声纹后自动认领说话人，认不出标「待复核」而非硬猜 | #23 |
 | **语义检索** | 关键词 + 向量 RRF 混合召回 | #25 |
+| **实时流式** | 会中边说边出转写与增量纪要，结束后合并成正式纪要 | #26 |
 
 每个 issue 的完整设计、验收标准、踩坑记录都在 [`docs/issues/`](docs/issues/)，
 issue → 代码 → 测试的追溯表见 [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md)。
@@ -95,7 +96,7 @@ pnpm dev              # http://localhost:3000
 ## 验证
 
 ```bash
-pnpm test:all          # 75 项断言，一次跑全部
+pnpm test:all          # 142 项断言，一次跑全部
 pnpm smoke             # 纯后端链路冒烟（不启动 UI）
 pnpm e2e               # 主链路端到端（需先 build + start -p 3210）
 pnpm fake:asr          # 起一个本地假 ASR 服务，无外部依赖验证真实 ASR 链路
@@ -107,6 +108,8 @@ pnpm fake:asr          # 起一个本地假 ASR 服务，无外部依赖验证�
 | `pnpm test:asr` | 13 | 两种 ASR 上游格式、时间换算、错误、降级 |
 | `pnpm test:voice` | 18 | 聚类、身份认领、标签合并、边界 |
 | `pnpm test:rag` | 16 | 分词、召回、RRF、租户隔离、幂等、防幻觉 |
+| `pnpm test:live` | 23 | 跨片拼接、增量去重、规则抽取 |
+| `pnpm e2e:live` | 24 | 分片上传 → 实时 SSE → 增量纪要 → 结束合并 |
 | `pnpm e2e:asr` | 8 | 上传音频 → 真实 ASR → 入库 → 纪要 |
 | `pnpm e2e:voice` | 20 | 注册声纹 → 会议聚类 → 删除 |
 
@@ -194,7 +197,7 @@ pnpm fake:asr          # 起一个本地假 ASR 服务，无外部依赖验证�
 
 ## 已知缺陷
 
-1. **无实时流式 ASR**：会议结束后才出纪要（backlog #22 的实时分支仍未做，需 WebSocket + 断句）
+1. **实时是「准实时」不是「字级实时」**：分片 4 秒 + ASR 往返，实际延迟约 4~8 秒；真正的低延迟需要 WebSocket 音频流（架构已预留，见 `lib/live/` 的 session 抽象）
 2. **声纹依赖外部服务**：不配 `VOICEPRINT_BASE_URL` 时用确定性伪向量，
    它能验证链路但**不是真声纹**，换了设备/录音就失效
 3. **语义检索用了兜底向量**：不配 `EMBEDDING_BASE_URL` 时是 bigram 哈希，
@@ -206,7 +209,7 @@ pnpm fake:asr          # 起一个本地假 ASR 服务，无外部依赖验证�
 
 ## 下一步
 
-- 实时流式 ASR（WebSocket + VAD 断句）
+- WebSocket 音频流（把当前的 4 秒分片降到亚秒级延迟）
 - 接入真实声纹服务（ECAPA-TDNN）与真实 embedding 服务
 - pgvector 替换内存余弦
 - 待办同步飞书 / GitHub Issue

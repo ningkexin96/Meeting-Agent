@@ -31,13 +31,14 @@
 | 22 | 接入真实 ASR | backlog | ✅ 已实现 | `lib/asr/real.ts` `lib/asr/index.ts` | `test:asr` 13 项 + `e2e:asr` 8 项 |
 | 23 | 声纹与说话人聚类 | backlog | ✅ 已实现 | `lib/voice/*` `app/api/voiceprints` | `test:voice` 18 项 + `e2e:voice` 20 项 |
 | 25 | 语义检索 | backlog | ✅ 已实现 | `lib/rag/*` | `test:rag` 16 项 |
+| 26 | 实时流式转写与增量纪要 | backlog（原 #22 实时分支） | ✅ 已实现 | `lib/live/*` `components/live/*` | `test:live` 23 项 + `e2e:live` 24 项 |
 
 三份详细 issue 正文在 [`docs/issues/`](docs/issues/)。
 
 > 注意：#22 在本迭代拆分过了。原 #22 是「实时流式 ASR」，本轮实现的是**离线真实转写**，
 > 实时能力仍留在 backlog（需要 WebSocket + 断句，是独立的三天工作量）。
 
-## 三、测试全景（共 75 项断言）
+## 三、测试全景（共 142 项断言）
 
 | 套件 | 命令 | 断言数 | 覆盖 |
 |---|---|---|---|
@@ -47,6 +48,8 @@
 | 语义检索 | `pnpm test:rag` | 16 | 分词、召回、RRF、隔离、幂等、防幻觉 |
 | 真实 ASR 端到端 | `pnpm e2e:asr` | 8 | 上传音频 → 真实 ASR → 入库 → 纪要 |
 | 声纹端到端 | `pnpm e2e:voice` | 20 | 注册 → 会议聚类 → 删除 |
+| 实时流单元 | `pnpm test:live` | 23 | 跨片拼接、去重、规则抽取 |
+| 实时流端到端 | `pnpm e2e:live` | 24 | 分片上传 → 实时 SSE → 增量纪要 → 结束合并 |
 | 后端冒烟 | `pnpm smoke` | 1 | 不启动 UI 的纯链路 |
 
 一次跑全部：

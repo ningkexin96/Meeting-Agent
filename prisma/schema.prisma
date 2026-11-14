@@ -77,6 +77,8 @@ model Meeting {
   minutes      Minutes?
   memories     Memory[]
   audits       AuditLog[]
+  liveSessions LiveSession[]
+  liveSegments LiveSegment[]
 
   @@index([tenantId])
 }
@@ -219,6 +221,82 @@ model Embedding {
   @@unique([tenantId, objectType, objectId])
   @@index([tenantId])
   @@index([tenantId, meetingId])
+}
+
+// 实时流式会话 —— 对应 issue #26
+// 过程数据：分片、累计话轮、增量纪要，都不进权威 Minutes 表
+model LiveSession {
+  id        String   @id @default(cuid())
+  tenantId  String
+  meetingId String
+  status    String   @default("live") // live | ended | failed
+  chunkSeq  Int      @default(0)
+  cursorMs  Int      @default(0) // 已处理到的音频时间点（毫秒）
+  error     String?
+  createdAt DateTime @default(now())
+  endedAt   DateTime?
+
+  meeting  Meeting      @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  chunks   LiveChunk[]
+  segments LiveSegment[]
+  items    LiveMinuteItem[]
+
+  @@index([tenantId])
+  @@index([meetingId])
+}
+
+model LiveChunk {
+  id         String   @id @default(cuid())
+  sessionId  String
+  seq        Int
+  startMs    Int
+  endMs      Int
+  bytes      Int
+  status     String   @default("pending") // pending | transcribed | failed
+  error      String?
+  createdAt  DateTime @default(now())
+
+  session LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, seq])
+}
+
+// 实时累积的转写片段（合并前）
+model LiveSegment {
+  id           String  @id @default(cuid())
+  sessionId    String
+  meetingId    String
+  seq          Int
+  speakerLabel String  @default("speaker_0")
+  startMs      Int
+  endMs        Int
+  text         String
+  confidence   Float   @default(0.9)
+  needsReview  Boolean @default(false)
+  createdAt    DateTime @default(now())
+
+  session LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  meeting Meeting     @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, seq])
+}
+
+// 增量纪要条目（过程数据，结束时合并进 Minutes）
+model LiveMinuteItem {
+  id          String   @id @default(cuid())
+  sessionId   String
+  kind        String // decision | action_item | risk
+  content     String
+  owner       String?
+  dueAt       String?
+  severity    String   @default("medium")
+  sourceText  String   @default("") // 原文片段，用于回溯与去重
+  fromTurnSeq Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  session LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
 }
 
 model AuditLog {

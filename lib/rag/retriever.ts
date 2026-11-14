@@ -83,20 +83,26 @@ export async function indexObjects(items: IndexInput[]): Promise<number> {
   return count;
 }
 
-/** 关键词召回：简单的包含匹配打分 */
+/**
+ * 关键词召回：按「命中多少个不同的查询词」打分，而不是按比例。
+ *
+ * 为什么不用比例：查询「上线时间是什么时候」切出 6 个 bigram，
+ * 正文只要擦到「时间」一个词就能得 1/6 ≈ 0.17，在长文档里几乎必然发生。
+ * 改成绝对命中数后，只擦到一个词的内容分数恒为 1，跨查询可比，门槛才有意义。
+ */
 function keywordRecall(
   query: string,
   rows: { objectType: string; objectId: string; content: string }[],
-): { objectId: string; score: number }[] {
+): { objectId: string; score: number; hits: number }[] {
   const kws = extractKeywords(query);
   if (kws.length === 0) return [];
   return rows
     .map((r) => {
       const hits = kws.filter((k) => r.content.includes(k)).length;
-      return { objectId: r.objectId, score: hits / kws.length };
+      return { objectId: r.objectId, hits, score: hits / kws.length };
     })
-    .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score);
+    .filter((r) => r.hits > 0)
+    .sort((a, b) => b.hits - a.hits || b.score - a.score);
 }
 
 /** 向量召回：从库里取全部向量后算余弦（十几人规模足够） */
@@ -157,19 +163,26 @@ export async function hybridRecall(
 
   // 向量结果的取舍规则（基于实测，而非拍脑袋）：
   // bigram 哈希向量的余弦无法区分相关/无关——实测「今天天气怎么样」得 0.178，
-  // 而正确命中的「存储怎么处理」才 0.200。所以：
-  //   - 关键词有命中时：向量只作补充，用相对阈值放宽召回
-  //   - 关键词完全没命中时：只接受「强向量命中」（≥ RAG_MIN_VECTOR_SCORE），
-  //     否则宁可不召回——把无关内容当依据正是幻觉的来源
-  const keywordHit = kw.length > 0;
+  // 而正确命中的「存储怎么处理」才 0.200。
+  //
+  // 所以分两种情况：
+  //   A. 关键词有「多词命中」（≥ 2 个不同词）→ 向量只作补充，用相对阈值放宽召回
+  //   B. 关键词弱（只擦到 1 个词）或没命中 → 向量必须自己够强，否则不召回
+  //      「把无关内容当依据」正是幻觉的来源，宁可少召回。
+  const strongKeyword = kw.some((k) => k.hits >= 2);
   const relativeMargin = Number(process.env.RAG_RELATIVE_MARGIN ?? 0.5);
   const minVectorScore = Number(process.env.RAG_MIN_VECTOR_SCORE ?? 0.25);
+  // 关键词最少要命中 2 个不同的词才算有效（1 个词在长文本里几乎必然误中）
+  const minKeywordHits = Number(process.env.RAG_MIN_KEYWORD_HITS ?? 2);
 
   const topScore = rawVec[0]?.score ?? 0;
-  const cutoff = keywordHit
-    ? Math.max(0, topScore * (1 - relativeMargin))
-    : Math.max(minVectorScore, topScore);
+  const cutoff = strongKeyword
+    ? topScore * (1 - relativeMargin) // A：靠关键词保底
+    : Math.max(minVectorScore, topScore); // B：向量需自身够强
   const vec = rawVec.filter((r) => r.score > 0 && r.score >= cutoff);
+
+  // 关键词结果过滤：只擦到 1 个词的不算命中
+  const kwFiltered = kw.filter((k) => k.hits >= minKeywordHits);
 
   const fused = new Map<string, RecallHit>();
 
@@ -191,7 +204,7 @@ export async function hybridRecall(
     return hit;
   };
 
-  kw.forEach((r, rank) => {
+  kwFiltered.forEach((r, rank) => {
     const hit = touch(r.objectId);
     if (!hit) return;
     hit.keywordScore = r.score;
