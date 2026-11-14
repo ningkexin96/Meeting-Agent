@@ -15,8 +15,13 @@ import next from "next";
 import { WebSocketServer } from "ws";
 import { handleRealtime } from "./lib/asr/ws-realtime.mjs";
 
-const dev = process.env.NODE_ENV !== "production";
-const port = Number(process.env.PORT ?? 3210);
+const dev = process.argv.includes("--dev") || process.env.NODE_ENV === "development";
+const portArgIndex = process.argv.findIndex((arg) => arg === "-p" || arg === "--port");
+const inlinePortArg = process.argv.find((arg) => arg.startsWith("--port="));
+const cliPort = Number(
+  portArgIndex >= 0 ? process.argv[portArgIndex + 1] : inlinePortArg?.split("=")[1],
+);
+const port = Number.isInteger(cliPort) && cliPort > 0 ? cliPort : Number(process.env.PORT ?? 3210);
 const hostname = process.env.HOSTNAME ?? "127.0.0.1";
 
 const app = next({ dev, hostname, port });

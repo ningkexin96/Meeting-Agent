@@ -21,6 +21,8 @@ export type ExtractedItem = {
   dueAt?: string;
   severity?: string;
   sourceText?: string;
+  /** 该条目实际来自哪一条 LiveSegment；不要用窗口末条冒充来源 */
+  sourceSeq?: number;
 };
 
 /** 文本相似度：Jaccard on bigram tokens，用于增量去重 */
@@ -87,6 +89,7 @@ export function extractByRules(
         content: text,
         severity,
         sourceText: `#${t.seq}`,
+        sourceSeq: t.seq,
       });
       continue;
     }
@@ -101,6 +104,7 @@ export function extractByRules(
         owner: ownerMatch?.[1],
         dueAt: dueMatch?.[1],
         sourceText: `#${t.seq}`,
+        sourceSeq: t.seq,
       });
       continue;
     }
@@ -110,6 +114,7 @@ export function extractByRules(
         kind: "decision",
         content: text,
         sourceText: `#${t.seq}`,
+        sourceSeq: t.seq,
       });
     }
   }
@@ -153,6 +158,7 @@ ${body}`,
         dueAt: i.dueAt || undefined,
         severity: i.severity || "medium",
         sourceText: i.sourceSeq != null ? `#${i.sourceSeq}` : undefined,
+        sourceSeq: Number.isInteger(i.sourceSeq) ? i.sourceSeq : undefined,
       }));
   } catch {
     return null;
@@ -162,32 +168,47 @@ ${body}`,
 /**
  * 触发一次增量抽取。
  * 返回本次新增的条目（已去重、已落库、已推送）。
+ *
+ * 关键点：抽取游标存在 LiveSession.lastExtractedSeq，而不是从纪要条目的 fromTurnSeq 反推。
+ * 这样即使某批话轮没有抽出任何条目，游标也会前进，不会把历史内容反复发给模型。
  */
+const extractionQueues = new Map<string, Promise<LiveMinutePayload[]>>();
+
 export async function extractIncrement(
   sessionId: string,
   opts: { force?: boolean } = {},
 ): Promise<LiveMinutePayload[]> {
-  const session = await prisma.liveSession.findUnique({ where: { id: sessionId } });
+  // 同一会话串行抽取，避免并发请求基于同一快照重复创建条目。
+  const previous = extractionQueues.get(sessionId) ?? Promise.resolve<LiveMinutePayload[]>([]);
+  const next = previous.then(() => extractIncrementNow(sessionId, opts));
+  const tracked = next.catch(() => [] as LiveMinutePayload[]);
+  extractionQueues.set(sessionId, tracked);
+  try {
+    return await next;
+  } finally {
+    if (extractionQueues.get(sessionId) === tracked) extractionQueues.delete(sessionId);
+  }
+}
+
+async function extractIncrementNow(
+  sessionId: string,
+  opts: { force?: boolean },
+): Promise<LiveMinutePayload[]> {
+  const session = await prisma.liveSession.findUnique({
+    where: { id: sessionId },
+    select: { meetingId: true, lastExtractedSeq: true },
+  });
   if (!session) throw new Error(`实时会话不存在：${sessionId}`);
 
-  const existingRows = await prisma.liveMinuteItem.findMany({ where: { sessionId } });
-  const existing: ExtractedItem[] = existingRows.map((r) => ({
-    kind: r.kind as ExtractedItem["kind"],
-    content: r.content,
-  }));
-
-  // 只看「上次抽取之后新增」的话轮
-  const lastSeq = existingRows.reduce((max, r) => Math.max(max, r.fromTurnSeq), -1);
   const fresh = await prisma.liveSegment.findMany({
-    where: { sessionId, seq: { gt: lastSeq } },
+    where: { sessionId, seq: { gt: session.lastExtractedSeq } },
     orderBy: { seq: "asc" },
   });
 
+  if (fresh.length === 0) return [];
   if (fresh.length < WINDOW_SIZE && !opts.force) return [];
 
   const turns = fresh.map((f) => ({ seq: f.seq, text: f.text, speaker: f.speakerLabel }));
-  if (turns.length === 0) return [];
-
   let items: ExtractedItem[] = [];
   if (!isMockLlm()) {
     const llm = await extractWithLlm(turns);
@@ -195,31 +216,53 @@ export async function extractIncrement(
   }
   if (items.length === 0) items = extractByRules(turns);
 
-  const kept = dedupe(items, existing);
+  const maxFreshSeq = fresh[fresh.length - 1].seq;
+  const created = await prisma.$transaction(async (tx) => {
+    // 事务内重新读取已有条目，避免 LLM 调用期间另一路写入了相同内容。
+    const existingRows = await tx.liveMinuteItem.findMany({ where: { sessionId } });
+    const existing: ExtractedItem[] = existingRows.map((r) => ({
+      kind: r.kind as ExtractedItem["kind"],
+      content: r.content,
+    }));
+    const kept = dedupe(items, existing);
+    const rows: LiveMinutePayload[] = [];
 
-  const created: LiveMinutePayload[] = [];
-  for (const item of kept) {
-    const row = await prisma.liveMinuteItem.create({
-      data: {
-        sessionId,
+    for (const item of kept) {
+      const explicitSeq = Number.isInteger(item.sourceSeq) ? item.sourceSeq : undefined;
+      const sourceSeq = explicitSeq !== undefined && fresh.some((f) => f.seq === explicitSeq)
+        ? explicitSeq
+        : fresh.find((f) => item.sourceText === `#${f.seq}`)?.seq ?? fresh[0].seq;
+
+      const row = await tx.liveMinuteItem.create({
+        data: {
+          sessionId,
+          kind: item.kind,
+          content: item.content,
+          owner: item.owner ?? null,
+          dueAt: item.dueAt ?? null,
+          severity: item.severity ?? "medium",
+          sourceText: item.sourceText ?? `#${sourceSeq}`,
+          fromTurnSeq: sourceSeq,
+        },
+      });
+      rows.push({
+        id: row.id,
         kind: item.kind,
         content: item.content,
-        owner: item.owner ?? null,
-        dueAt: item.dueAt ?? null,
-        severity: item.severity ?? "medium",
-        sourceText: item.sourceText ?? "",
-        fromTurnSeq: fresh[fresh.length - 1].seq,
-      },
+        owner: row.owner,
+        dueAt: row.dueAt,
+        severity: row.severity,
+      });
+    }
+
+    // 即使 kept 为空也必须推进游标；这是防重复模型调用的关键。
+    await tx.liveSession.updateMany({
+      where: { id: sessionId, lastExtractedSeq: { lt: maxFreshSeq } },
+      data: { lastExtractedSeq: maxFreshSeq },
     });
-    created.push({
-      id: row.id,
-      kind: item.kind,
-      content: item.content,
-      owner: row.owner,
-      dueAt: row.dueAt,
-      severity: row.severity,
-    });
-  }
+
+    return rows;
+  });
 
   if (created.length > 0) {
     runBus.publish(session.meetingId, { type: "live:minutes", items: created, at: Date.now() });

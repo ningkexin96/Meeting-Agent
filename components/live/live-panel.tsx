@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useRealtimeAsr } from "./use-realtime-asr";
+import { useLiveRecorder } from "./use-live-recorder";
 import { cn, formatMs } from "@/lib/utils";
 
 type Segment = {
@@ -59,12 +60,14 @@ export function LivePanel({
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [ended, setEnded] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [ending, setEnding] = useState(false);
   const restored = useRef(false);
   const seqRef = useRef(0);
 
   // 实时识别结果 → 本地列表
-  const onFinal = useCallback((r: { text: string; beginMs: number; endMs: number }) => {
-    const seq = seqRef.current++;
+  const onFinal = useCallback((r: { text: string; beginMs: number; endMs: number; seq?: number }) => {
+    const seq = r.seq ?? seqRef.current++;
     setSegments((prev) => [
       ...prev,
       {
@@ -84,22 +87,33 @@ export function LivePanel({
   }, []);
 
   const asr = useRealtimeAsr({ meetingId, handlers: { onFinal, onSession } });
+  const recorder = useLiveRecorder({
+    sessionId: realtime ? null : sessionId,
+    onChunkResult: (r) => {
+      if (!r.ok) setHint(`分片 #${r.seq} 转写失败：${r.error ?? "未知错误"}`);
+    },
+  });
 
-  // 录音期间定期拉取增量纪要（后端每攒够 4 句抽取一次）
+  const recording = realtime ? asr.state === "recording" : recorder.state === "recording";
+  const busy = realtime ? asr.state === "connecting" : starting || ending;
+  const paused = realtime ? asr.state === "paused" : false;
+
+  // 录音期间定期拉取增量纪要（WebSocket 与分片模式共用同一份会话状态）
   useEffect(() => {
-    if (asr.state !== "recording" || !sessionId) return;
+    if (!recording || !sessionId) return;
     const timer = setInterval(async () => {
       try {
         const res = await fetch(`/api/live?sessionId=${sessionId}`);
         if (!res.ok) return;
         const data = await res.json();
         if (Array.isArray(data.items)) setItems(data.items);
+        if (!realtime && Array.isArray(data.segments)) setSegments(data.segments);
       } catch {
         /* 网络抖动忽略 */
       }
     }, 3000);
     return () => clearInterval(timer);
-  }, [asr.state, sessionId]);
+  }, [recording, realtime, sessionId]);
 
   // 恢复上一场会话内容
   useEffect(() => {
@@ -117,39 +131,74 @@ export function LivePanel({
     })();
   }, [lastSessionId]);
 
-  const recording = asr.state === "recording";
   // 有未结束的实时会话（含刷新后从后端恢复的），都应显示「结束」而不是「开始」
-  const activeSession = asr.state !== "recording" && asr.state !== "connecting" && !ended && Boolean(sessionId) && segments.length > 0;
-  const busy = asr.state === "connecting";
-  const paused = asr.state === "paused";
+  const activeSession = !recording && !busy && !ended && Boolean(sessionId) && segments.length > 0;
   // 「在录制但收不到声音」需要明确提示，否则用户只会看到数字不动
-  const noAudio = recording && !asr.audioAlive;
+  const noAudio = realtime && recording && !asr.audioAlive;
+  const activeError = realtime ? asr.error : recorder.error;
 
-  function start() {
+  async function start() {
     setEnded(false);
     setHint(null);
-    void asr.start();
+
+    if (realtime) {
+      void asr.start();
+      return;
+    }
+
+    // 分片模式必须先创建 LiveSession，再开始 MediaRecorder；以前页面只改了说明文字，
+    // 实际仍无条件走 DashScope WebSocket，导致 mock/real/qwen 模式无法录音。
+    setStarting(true);
+    try {
+      const res = await fetch("/api/live", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ meetingId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.sessionId) throw new Error(data.error ?? "创建实时会话失败");
+      setSessionId(data.sessionId);
+      setSegments([]);
+      setItems([]);
+      seqRef.current = 0;
+      await recorder.start(data.sessionId);
+    } catch (e) {
+      setHint((e as Error).message);
+    } finally {
+      setStarting(false);
+    }
   }
 
   async function end() {
-    asr.stop();
-    setEnded(true);
-    // 结束实时会话后合并纪要
     if (!sessionId) {
       setHint("会话尚未创建，无法合并纪要");
       return;
     }
-    const res = await fetch("/api/live/end", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setHint(data.error ?? "合并失败");
-      return;
+
+    setEnding(true);
+    setHint(null);
+    try {
+      const stopped = realtime ? await asr.stop() : await recorder.stop();
+      if (!stopped) {
+        setHint("等待识别服务结束超时，正在合并已落库的内容");
+      }
+
+      const res = await fetch("/api/live/end", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok !== true) {
+        throw new Error(data.error ?? "合并失败");
+      }
+      setEnded(true);
+      router.refresh();
+    } catch (e) {
+      setHint((e as Error).message);
+    } finally {
+      setEnding(false);
     }
-    router.refresh();
   }
 
   const decisions = items.filter((i) => i.kind === "decision");
@@ -173,7 +222,7 @@ export function LivePanel({
               {busy && (
                 <Badge variant="warning" className="gap-1">
                   <Loader2 className="size-2.5 animate-spin" />
-                  连接中
+                  {ending ? "正在结束" : starting ? "创建会话中" : "连接中"}
                 </Badge>
               )}
               {paused && (
@@ -189,13 +238,13 @@ export function LivePanel({
                 : "当前为分片模式（ASR_PROVIDER 非 dashscope）"}
             </p>
           </div>
-          {recording || busy || paused || activeSession ? (
-            <Button onClick={end} variant="destructive" size="sm" disabled={busy}>
+          {recording || ending || paused || activeSession ? (
+            <Button onClick={end} variant="destructive" size="sm" disabled={ending}>
               <Square className="size-3.5" />
-              结束并生成纪要
+              {ending ? "正在结束…" : "结束并生成纪要"}
             </Button>
           ) : (
-            <Button onClick={start} size="sm" disabled={!canRun}>
+            <Button onClick={start} size="sm" disabled={!canRun || busy}>
               <Mic className="size-3.5" />
               {ended ? "重新开始" : "开始实时会议"}
             </Button>
@@ -208,10 +257,10 @@ export function LivePanel({
               当前角色无权限开启实时会议（需要 owner 或 member）
             </div>
           )}
-          {asr.error && (
+          {activeError && (
             <div className="flex items-start gap-1.5 rounded-lg bg-error-bg px-2.5 py-2 text-xs text-error">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-              {asr.error}
+              {activeError}
             </div>
           )}
 
@@ -244,14 +293,18 @@ export function LivePanel({
 
           {(recording || busy) && (
             <div className="grid grid-cols-3 gap-2">
-              <Stat icon={Activity} label="已采集" value={`${asr.pcmSeconds.toFixed(1)}s`} />
+              <Stat
+                icon={Activity}
+                label="已采集"
+                value={realtime ? `${asr.pcmSeconds.toFixed(1)}s` : `${(recorder.elapsedMs / 1000).toFixed(1)}s`}
+              />
               <Stat icon={Mic} label="已识别" value={String(segments.length)} />
               <Stat icon={FileText} label="纪要条目" value={String(items.length)} />
             </div>
           )}
 
           {/* 实时中间结果：正在识别的文字 */}
-          {asr.interim && (
+          {realtime && asr.interim && (
             <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-2">
               <div className="text-[10px] text-primary/70">正在识别…</div>
               <div className="mt-0.5 text-[13px] text-muted-foreground">{asr.interim}</div>

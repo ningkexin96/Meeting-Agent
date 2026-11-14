@@ -46,7 +46,7 @@ function buildGatewayModel(): Model<"openai-completions"> {
 type ModelsLike = {
   setProvider: (p: unknown) => void;
   getModel: (provider: string, id: string) => Model<"openai-completions"> | undefined;
-  completeSimple: (model: unknown, context: unknown) => Promise<unknown>;
+  completeSimple: (model: unknown, context: unknown, options?: unknown) => Promise<unknown>;
   streamSimple: (model: unknown, context: unknown, options?: unknown) => unknown;
 };
 
@@ -84,11 +84,19 @@ export async function getModel() {
 }
 
 /** 真实模型一次性补全（mock 模式下不会被调用） */
-export async function completeText(prompt: string): Promise<string> {
+export async function completeText(
+  prompt: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<string> {
   const models = await getModels();
   const model = await getModel();
   const res = await models.completeSimple(model, {
     messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+  }, {
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
+    // 重试由 lib/agent/llm-call.ts 统一控制，避免底层 SDK 与上层重复重试。
+    maxRetries: 0,
   });
   const content = (res as { content?: { type: string; text?: string }[] }).content ?? [];
   return content

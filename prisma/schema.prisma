@@ -129,12 +129,16 @@ model TranscriptTurn {
   text          String
   asrConfidence Float   @default(1)
   needsReview   Boolean @default(false)
+  // 实时会话来源：用于把 LiveSegment 幂等落成正式话轮，并保证引用不串到旧录音
+  liveSessionId String?
+  liveSeq       Int?
 
   meeting     Meeting            @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   participant MeetingParticipant @relation(fields: [participantId], references: [id])
 
   citations Citation[]
 
+  @@unique([meetingId, liveSessionId, liveSeq])
   @@index([meetingId, idx])
 }
 
@@ -280,10 +284,11 @@ model LiveSession {
   id        String   @id @default(cuid())
   tenantId  String
   meetingId String
-  status    String   @default("live") // live | ended | failed
-  chunkSeq  Int      @default(0)
-  cursorMs  Int      @default(0) // 已处理到的音频时间点（毫秒）
-  error     String?
+  status    String   @default("live") // live | ending | ended | failed
+  chunkSeq         Int      @default(0)
+  cursorMs         Int      @default(0) // 已处理到的音频时间点（毫秒）
+  lastExtractedSeq Int      @default(-1) // 已参与增量抽取的最后一个 LiveSegment seq
+  error            String?
   createdAt DateTime @default(now())
   endedAt   DateTime?
 
@@ -329,6 +334,7 @@ model LiveSegment {
   session LiveSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   meeting Meeting     @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
+  @@unique([sessionId, seq])
   @@index([sessionId, seq])
 }
 

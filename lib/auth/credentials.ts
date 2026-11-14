@@ -114,6 +114,8 @@ export async function destroySession(token: string | undefined) {
 export const sessionCookieOptions = {
   httpOnly: true,
   sameSite: "lax" as const,
+  // 生产 HTTPS 下避免会话 cookie 经明文 HTTP 发出；本地 http://127.0.0.1 开发不受影响。
+  secure: process.env.NODE_ENV === "production",
   path: "/",
   maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
 };
