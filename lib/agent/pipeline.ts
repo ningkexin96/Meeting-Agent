@@ -318,13 +318,52 @@ async function resolveSpeakers(args: {
   const embedder = getEmbedder();
   const voiceprintEnabled = process.env.VOICEPRINT_ENABLED !== "0";
 
+  // 云 ASR 已返回原生 speaker_id 时，直接用它的分段结果，不再做声纹聚类。
+  // 原因：声纹聚类的目的是「猜出谁和谁不同」，而这里已经有权威答案了。
+  const asrProvider = process.env.ASR_PROVIDER ?? "mock";
+  const hasNativeDiarization =
+    asrProvider === "qwen" &&
+    process.env.DASHSCOPE_DIARIZE !== "0" &&
+    new Set(args.turns.map((t) => t.speakerLabel)).size > 1;
+
+  if (hasNativeDiarization) {
+    const labels = [...new Set(args.turns.map((t) => t.speakerLabel))].sort();
+    return {
+      mode: "voiceprint",
+      engine: "qwen-diarization",
+      speakers: labels.map((label, i) => ({
+        label: `speaker_${i}`,
+        userId: null,
+        // 云服务只告诉我们「是不同的说话人」，不告诉是谁——如实标注
+        displayName: `说话人 ${String.fromCharCode(65 + i)}`,
+        confidence: 0.9,
+        needsReview: true,
+      })),
+      labelMap: new Map(labels.map((l, i) => [l, `speaker_${i}`])),
+    };
+  }
+
   if (voiceprintEnabled && args.audioPath) {
     try {
       // 每段话轮提一次声纹（真实服务可以按时间窗切，离线兜底用整文件+窗口种子）
       const segments: { speakerLabel: string; embedding: number[] }[] = [];
+      let embedFailed = 0;
       for (const t of args.turns) {
-        const emb = await embedder.embed(args.audioPath, t.startMs, t.endMs);
-        segments.push({ speakerLabel: t.speakerLabel, embedding: emb });
+        try {
+          const emb = await embedder.embed(args.audioPath, t.startMs, t.endMs);
+          segments.push({ speakerLabel: t.speakerLabel, embedding: emb });
+        } catch {
+          // 单段太短/静音属于常态，跳过而不是整场失败
+          embedFailed++;
+        }
+      }
+      if (embedFailed > 0) {
+        console.warn(`[voiceprint] ${embedFailed}/${args.turns.length} 段声纹提取失败（片段过短或静音）`);
+      }
+      // 提取到的片段太少，聚类没有意义——直接退回标签映射
+      if (segments.length < 2) {
+        console.warn(`[voiceprint] 有效声纹片段仅 ${segments.length} 段，跳过聚类`);
+        throw new Error("有效声纹片段不足");
       }
       const gallery = await getGallery(args.tenantId);
       const speakers = clusterSpeakers(segments, { gallery });

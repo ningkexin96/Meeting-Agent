@@ -10,6 +10,14 @@ export function getAsrModeInfo(): { provider: string; mode: string; demo: boolea
     };
   }
 
+  if (provider === "qwen") {
+    return {
+      provider,
+      mode: `Qwen-Audio-ASR + 说话人分离（${process.env.DASHSCOPE_DIARIZE_MODEL ?? "qwen-audio-3.1-asr-flash"}）`,
+      demo: false,
+    };
+  }
+
   if (provider === "dashscope") {
     return {
       provider,
