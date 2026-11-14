@@ -1,11 +1,42 @@
 // Seed 样例数据 —— 对应 issue #3
 // 1 个租户、3 个用户（owner / member / viewer）、1 场待处理会议 + 1 场历史会议
+//
+// ⚠️ 这个脚本会清空整库后重建。为避免误在真实数据上执行，加了两道保护：
+//   1. 只允许本地 SQLite 文件库（DATABASE_URL 必须是 file:）
+//   2. 若检测到已有「非演示」数据，必须显式设置 SEED_FORCE=1 才继续
 import { PrismaClient } from "@prisma/client";
 import { SAMPLE_TRANSCRIPT, SAMPLE_SPEAKERS, HISTORY_TRANSCRIPT } from "../lib/asr/samples";
 
 const prisma = new PrismaClient();
 
+/** 库里有 demo 域名的账号，才认为是本项目自己的演示库 */
+const DEMO_EMAIL_DOMAIN = "@demo.dev";
+
+async function guardBeforeWipe() {
+  const url = process.env.DATABASE_URL ?? "";
+  // 保护一：拒绝在远端数据库上执行（file: 之外一律不认）
+  if (!url.startsWith("file:")) {
+    throw new Error(
+      `拒绝执行：seed 会清空整个数据库，但 DATABASE_URL 不是本地 SQLite 文件（${url || "未设置"}）。\n` +
+        "如果你确实要在该库上重建演示数据，请改为手动执行。",
+    );
+  }
+
+  // 保护二：库里已有非演示数据时，要求显式确认
+  const users = await prisma.user.findMany({ select: { email: true } });
+  const foreignUsers = users.filter((u) => !u.email.endsWith(DEMO_EMAIL_DOMAIN));
+  if (foreignUsers.length > 0 && process.env.SEED_FORCE !== "1") {
+    throw new Error(
+      `拒绝执行：数据库里已有 ${foreignUsers.length} 个非演示账号（例如 ${foreignUsers[0].email}），` +
+        "继续执行会全部删除。\n" +
+        "确认要清空重建请加参数：SEED_FORCE=1",
+    );
+  }
+}
+
 async function main() {
+  await guardBeforeWipe();
+
   // 幂等：清空后重建
   await prisma.citation.deleteMany();
   await prisma.actionItem.deleteMany();

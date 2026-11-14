@@ -9,7 +9,7 @@
     "lint": "next lint",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
-    "db:reset": "prisma db push --force-reset && pnpm db:seed",
+    "db:reset": "node scripts/reset-db.mjs",
     "db:seed": "tsx prisma/seed.ts",
     "smoke": "tsx scripts/smoke.ts",
     "test:asr": "tsx scripts/test-asr.ts",
@@ -23,7 +23,7 @@
     "e2e:voice": "node scripts/e2e-voice.mjs",
     "e2e:live": "node scripts/e2e-live.mjs",
     "e2e:real": "node scripts/e2e-real-llm.mjs",
-    "test:all": "pnpm test:asr && pnpm test:voice && pnpm test:rag && pnpm test:live && pnpm test:llm && pnpm e2e:asr && pnpm e2e:voice && pnpm e2e:live",
+    "test:all": "pnpm test:asr && pnpm test:voice && pnpm test:rag && pnpm test:live && pnpm test:llm && pnpm test:incremental && pnpm test:live-edge",
     "fake:asr": "node scripts/fake-asr-server.mjs",
     "fake:live-asr": "node scripts/fake-live-asr.mjs",
     "demo:live": "node scripts/demo-live-session.mjs",
@@ -36,7 +36,9 @@
     "test:speaker": "node scripts/test-speaker-naming.mjs",
     "test:incremental": "tsx scripts/test-incremental-unit.ts",
     "test:live-e2e": "tsx scripts/test-live-e2e.ts",
-    "test:live-edge": "tsx scripts/test-live-edge.ts"
+    "test:live-edge": "tsx scripts/test-live-edge.ts",
+    "test:ci": "pnpm e2e && pnpm test:memory && pnpm test:live-e2e && pnpm test:speaker",
+    "test:cloud": "pnpm test:asr-cloud && pnpm test:ws-audio && pnpm e2e:realtime && pnpm e2e:diarization"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",

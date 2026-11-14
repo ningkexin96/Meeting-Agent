@@ -36,18 +36,32 @@ async function main() {
     data: { tenantId: tenant.id, title: "RAG 测试会议", status: "done", stage: "DONE" },
   });
 
+  // 必须建真实的 Decision + Minutes 记录：
+  // hybridRecall 最后会回查权威表（filterAuthoritativeHits），
+  // 只写 Embedding 而不建实体，命中会被当成孤儿索引丢掉。
+  const minutes = await prisma.minutes.create({
+    data: { meetingId: meeting.id, overview: "RAG 测试纪要", status: "confirmed" },
+  });
   const corpus = [
-    { id: "obj-schedule", content: "月底发布第一个可用版本，实时转写放到下个迭代。" },
-    { id: "obj-frontend", content: "前端时间紧，纪要页先做字段级编辑，富文本下个迭代。" },
-    { id: "obj-risk", content: "缺少声纹库，外部参会者可能识别不准。" },
-    { id: "obj-storage", content: "音频先用本地目录存储，后续迁移对象存储。" },
+    { key: "obj-schedule", content: "月底发布第一个可用版本，实时转写放到下个迭代。" },
+    { key: "obj-frontend", content: "前端时间紧，纪要页先做字段级编辑，富文本下个迭代。" },
+    { key: "obj-risk", content: "缺少声纹库，外部参会者可能识别不准。" },
+    { key: "obj-storage", content: "音频先用本地目录存储，后续迁移对象存储。" },
   ];
+
+  const idByKey: Record<string, string> = {};
+  for (const c of corpus) {
+    const d = await prisma.decision.create({
+      data: { minutesId: minutes.id, content: c.content },
+    });
+    idByKey[c.key] = d.id;
+  }
 
   await indexObjects(
     corpus.map((c) => ({
       tenantId: tenant.id,
       objectType: "decision" as const,
-      objectId: c.id,
+      objectId: idByKey[c.key],
       meetingId: meeting.id,
       content: c.content,
     })),
@@ -63,13 +77,13 @@ async function main() {
   ok("召回有结果", hits.length > 0, `${hits.length} 条`);
   ok(
     "强关键词命中正确条目",
-    hits.some((h) => h.objectId === "obj-schedule"),
+    hits.some((h) => h.objectId === idByKey["obj-schedule"]),
     hits.map((h) => h.objectId).join(", "),
   );
   ok("命中标注了来源", hits[0].via.length > 0, hits[0].via.join("+"));
 
   const kwHits = await hybridRecall(tenant.id, "声纹 识别不准", { limit: 3 });
-  ok("另一条也能命中", kwHits[0].objectId === "obj-risk", kwHits[0].objectId);
+  ok("另一条也能命中", kwHits[0].objectId === idByKey["obj-risk"], kwHits[0].objectId);
 
   console.log("== 排序与融合 ==");
   ok("分数降序", hits.every((h, i) => i === 0 || h.score <= hits[i - 1].score + 1e-9));
@@ -104,7 +118,7 @@ async function main() {
     corpus.map((c) => ({
       tenantId: tenant.id,
       objectType: "decision" as const,
-      objectId: c.id,
+      objectId: idByKey[c.key],
       meetingId: meeting.id,
       content: c.content,
     })),
