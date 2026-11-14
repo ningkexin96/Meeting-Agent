@@ -9,10 +9,14 @@ export const isMockLlm = () => process.env.MOCK_LLM === "1";
 // pi-ai 是 ESM-only（package.json 只有 import 条件，没有 require）。
 // Next/webpack 走 bundle 没问题；但 tsx/CJS 冒烟脚本里静态 import 会解析失败，
 // 所以统一改成运行时动态 import，两种执行环境都能用（类型用 as any 规避双条件导出差异）。
+//
+// 注意导入路径：ProviderStreams 工厂在 api/openai-completions.**lazy**，
+// api/openai-completions 只导出 stream / streamSimple 两个函数本体，没有工厂。
+// 路径写错会拿到 undefined，运行时表现为 "e is not a function"。
 async function loadPi() {
   const [core, api] = await Promise.all([
     import("@earendil-works/pi-ai"),
-    import("@earendil-works/pi-ai/api/openai-completions"),
+    import("@earendil-works/pi-ai/api/openai-completions.lazy"),
   ]);
   return {
     createModels: core.createModels,

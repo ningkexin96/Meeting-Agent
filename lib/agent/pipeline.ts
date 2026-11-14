@@ -53,21 +53,6 @@ export async function runPipeline(ctx: ToolContext) {
 
     let turnCount = await prisma.transcriptTurn.count({ where: { meetingId: ctx.meetingId } });
     if (turnCount === 0) {
-      // 前置校验：真实 ASR 下没有音频就没法转写，直接给出可理解的错误，
-      // 而不是让上游抛一个难懂的异常。mock 模式除外（它本来就不读音频）。
-      const provider = process.env.ASR_PROVIDER ?? "mock";
-      if (provider !== "mock" && !meeting.audioPath) {
-        const liveCount = await prisma.liveSegment.count({
-          where: { meetingId: ctx.meetingId },
-        });
-        if (liveCount === 0) {
-          throw new Error(
-            "这场会议没有音频，也没有实时转写记录，无法生成纪要。" +
-              "请先上传音频，或改用「实时模式」边开会边记录。",
-          );
-        }
-      }
-
       emitTool("run_transcription", {
         asr: process.env.ASR_PROVIDER ?? "mock",
         kind: process.env.ASR_KIND ?? "-",

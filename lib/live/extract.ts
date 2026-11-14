@@ -122,16 +122,18 @@ async function extractWithLlm(
   turns: { seq: number; text: string; speaker: string }[],
 ): Promise<ExtractedItem[] | null> {
   try {
-    const { completeText } = await import("@/lib/llm");
+    const { callModel, extractJson } = await import("@/lib/agent/llm-call");
     const body = turns.map((t) => `#${t.seq} ${t.speaker}: ${t.text}`).join("\n");
-    const raw = await completeText(
+    const raw = await callModel(
       `你是实时会议纪要抽取器。只输出 JSON，不要解释。格式：
 {"items":[{"kind":"decision|action_item|risk","content":"","owner":"","dueAt":"","severity":"low|medium|high","sourceSeq":0}]}
 只抽取明确出现的决议、待办、风险，不确定就少抽，不要编造。owner/dueAt 不知道就留空。
 
 ${body}`,
+      "extract",
+      { timeoutMs: 45_000, maxRetries: 1 },
     );
-    const json = JSON.parse(raw.replace(/^```json\s*/i, "").replace(/```$/, "").trim()) as {
+    const json = extractJson<{
       items?: {
         kind: string;
         content: string;
@@ -140,7 +142,7 @@ ${body}`,
         severity?: string;
         sourceSeq?: number;
       }[];
-    };
+    }>(raw);
     if (!Array.isArray(json.items)) return null;
     return json.items
       .filter((i) => i.content && ["decision", "action_item", "risk"].includes(i.kind))

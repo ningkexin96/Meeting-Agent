@@ -23,10 +23,11 @@ export async function POST(req: Request) {
   if (isMockLlm() || hits.length === 0) {
     answer = mockAnswer(q, hits.map((h) => ({ title: h.title, text: h.text })));
   } else {
-    const { completeText } = await import("@/lib/llm");
+    const { callModel } = await import("@/lib/agent/llm-call");
     const ctx = hits.map((h, i) => `${i + 1}. 《${h.title}》${h.text}`).join("\n");
-    answer = await completeText(
+    answer = await callModel(
       `只依据下面的资料回答问题，资料没有就说没找到，不要编造。\n\n资料：\n${ctx}\n\n问题：${q}`,
+      "answer",
     );
   }
 
