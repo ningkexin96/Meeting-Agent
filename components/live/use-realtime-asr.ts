@@ -25,6 +25,8 @@ export type RealtimeState = "idle" | "connecting" | "recording" | "paused" | "st
 export type RealtimeResultHandlers = {
   onFinal?: (r: { text: string; beginMs: number; endMs: number }) => void;
   onInterim?: (text: string) => void;
+  /** 后端创建会话后回调，用于拉取增量纪要 */
+  onSession?: (sessionId: string) => void;
 };
 
 export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; handlers: RealtimeResultHandlers }) {
@@ -152,6 +154,13 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
         try {
           msg = JSON.parse(ev.data as string);
         } catch {
+          return;
+        }
+
+        if (msg.type === "session") {
+          // 拿到后端创建的会话 ID，用于增量纪要拉取
+          const sid = (msg as { sessionId?: string }).sessionId;
+          if (sid) handlersRef.current.onSession?.(sid);
           return;
         }
 
