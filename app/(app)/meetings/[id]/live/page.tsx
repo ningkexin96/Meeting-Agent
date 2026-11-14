@@ -27,6 +27,7 @@ export default async function LivePage({ params }: { params: Promise<{ id: strin
   }
 
   const canRun = session.role === "owner" || session.role === "member";
+  const realtime = process.env.ASR_PROVIDER === "dashscope";
   const [segCount, lastSession] = await Promise.all([
     prisma.liveSegment.count({ where: { meetingId: meeting.id } }),
     prisma.liveSession.findFirst({
@@ -58,7 +59,7 @@ export default async function LivePage({ params }: { params: Promise<{ id: strin
         meetingId={meeting.id}
         canRun={canRun}
         lastSessionId={lastSession?.id ?? null}
-        realtime={["dashscope", "qwen"].includes(process.env.ASR_PROVIDER ?? "")}
+        realtime={realtime}
       />
 
       <AudioDiagnostics />
@@ -66,9 +67,9 @@ export default async function LivePage({ params }: { params: Promise<{ id: strin
       <Card size="sm">
         <CardContent className="text-[11px] leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">原理：</span>
-          浏览器用 AudioWorklet 采集麦克风，以 100ms 为单位产出 16kHz 单声道 PCM，
-          通过 WebSocket 持续推给服务端，服务端转发给云端语音识别，边说边回传结果。
-          会议结束后合并为权威纪要。
+          {realtime
+            ? "浏览器用 AudioWorklet 采集 16kHz PCM，通过 WebSocket 推给 DashScope 实时识别，边说边回传结果。"
+            : "浏览器用 MediaRecorder 按 4 秒切片上传，服务端用当前 ASR_PROVIDER 逐片识别并合并。会议结束后统一生成权威纪要。"}
         </CardContent>
       </Card>
     </div>

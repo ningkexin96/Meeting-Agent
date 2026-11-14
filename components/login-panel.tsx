@@ -24,7 +24,7 @@ import { cn } from "@/lib/utils";
 
 type Tab = "login" | "register";
 
-export function AuthPanel() {
+export function AuthPanel({ registerEnabled = true }: { registerEnabled?: boolean }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("login");
   const [error, setError] = useState("");
@@ -171,14 +171,16 @@ export function AuthPanel() {
                   >
                     登录
                   </button>
-                  <button
-                    type="button"
-                    className="auth-tab"
-                    data-active={tab === "register"}
-                    onClick={() => switchTab("register")}
-                  >
-                    注册
-                  </button>
+                  {registerEnabled && (
+                    <button
+                      type="button"
+                      className="auth-tab"
+                      data-active={tab === "register"}
+                      onClick={() => switchTab("register")}
+                    >
+                      注册
+                    </button>
+                  )}
                 </div>
 
                 {error && (

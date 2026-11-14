@@ -17,7 +17,7 @@ export type StartSessionInput = {
 export async function startSession(input: StartSessionInput) {
   // 先把该会议残留的未结束会话收掉，避免同时存在两个 live 会话
   const stale = await prisma.liveSession.findMany({
-    where: { meetingId: input.meetingId, tenantId: input.tenantId, status: "live" },
+    where: { meetingId: input.meetingId, tenantId: input.tenantId, status: { in: ["live", "ending"] } },
   });
   for (const s of stale) {
     await prisma.liveSession.update({
@@ -72,13 +72,25 @@ export async function getSession(sessionId: string, tenantId: string) {
 
 /** 结束会话：合并最终纪要，走唯一写库路径 */
 export async function endSession(sessionId: string, ctx: { tenantId: string; userId: string; role: string }) {
+  // 原子认领结束权，避免浏览器重试或双击导致两个 endSession 并发跑。
+  const claimed = await prisma.liveSession.updateMany({
+    where: { id: sessionId, tenantId: ctx.tenantId, status: "live" },
+    data: { status: "ending" },
+  });
+  if (claimed.count === 0) {
+    const current = await prisma.liveSession.findFirst({
+      where: { id: sessionId, tenantId: ctx.tenantId },
+      select: { status: true },
+    });
+    if (!current) throw new Error("实时会话不存在或不属于当前租户");
+    if (current.status === "ended") throw new Error("会话已经结束过了");
+    throw new Error(`会话状态为 ${current.status}，不能结束`);
+  }
+
   const session = await prisma.liveSession.findFirst({
     where: { id: sessionId, tenantId: ctx.tenantId },
   });
   if (!session) throw new Error("实时会话不存在或不属于当前租户");
-
-  if (session.status === "ended") throw new Error("会话已经结束过了");
-  if (session.status !== "live") throw new Error(`会话状态为 ${session.status}，不能结束`);
 
   // ToolContext 的 meetingId 必须来自会话，不能用调用方传的空值
   const toolCtx: ToolContext = {
@@ -88,99 +100,122 @@ export async function endSession(sessionId: string, ctx: { tenantId: string; use
     meetingId: session.meetingId,
   };
 
-  // 最后再抽一次，把剩余不足一个窗口的内容也补上
-  await extractIncrement(sessionId, { force: true });
+  try {
+    // 最后再抽一次，把剩余不足一个窗口的内容也补上。
+    // WebSocket 服务端在发送 stopped 前已等待最终落库；这里再兜底一次。
+    await extractIncrement(sessionId, { force: true });
 
-  const segments = await prisma.liveSegment.findMany({
-    where: { sessionId },
-    orderBy: { seq: "asc" },
-  });
-  const items = await prisma.liveMinuteItem.findMany({ where: { sessionId } });
-
-  if (segments.length === 0) {
-    await prisma.liveSession.update({
-      where: { id: sessionId },
-      data: { status: "failed", error: "没有转写到任何内容", endedAt: new Date() },
+    const segments = await prisma.liveSegment.findMany({
+      where: { sessionId },
+      orderBy: { seq: "asc" },
     });
-    return { ok: false, error: "没有转写到任何内容" };
-  }
+    const items = await prisma.liveMinuteItem.findMany({ where: { sessionId } });
 
-  // 1. 把实时片段落成正式话轮（供引用回溯）
-  //    注意：这里复用会议已有参与者，没有就建一个匿名的
-  let participant = await prisma.meetingParticipant.findFirst({
-    where: { meetingId: session.meetingId },
-  });
-  if (!participant) {
-    participant = await prisma.meetingParticipant.create({
-      data: {
-        meetingId: session.meetingId,
-        displayName: "实时转写",
-        speakerLabel: "speaker_0",
-        confidence: 0.8,
-      },
+    if (segments.length === 0) {
+      await prisma.liveSession.update({
+        where: { id: sessionId },
+        data: { status: "failed", error: "没有转写到任何内容", endedAt: new Date() },
+      });
+      return { ok: false, error: "没有转写到任何内容" };
+    }
+
+    // 1. 本次实时会话的话轮必须追加到正式 TranscriptTurn。
+    //    不能因为会议已有上传转写就跳过，否则纪要引用会指向旧话轮。
+    let participant = await prisma.meetingParticipant.findFirst({
+      where: { meetingId: session.meetingId, speakerLabel: "speaker_0" },
     });
-  }
-
-  const existingTurns = await prisma.transcriptTurn.count({
-    where: { meetingId: session.meetingId },
-  });
-  if (existingTurns === 0) {
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments[i];
-      await prisma.transcriptTurn.create({
+    if (!participant) {
+      participant = await prisma.meetingParticipant.create({
         data: {
           meetingId: session.meetingId,
-          participantId: participant.id,
-          idx: i,
-          startMs: s.startMs,
-          endMs: s.endMs,
-          text: s.text,
-          asrConfidence: s.confidence,
-          needsReview: s.needsReview,
+          displayName: "实时转写",
+          speakerLabel: "speaker_0",
+          confidence: 0.8,
         },
       });
     }
+
+    const existingLiveTurns = await prisma.transcriptTurn.findMany({
+      where: { meetingId: session.meetingId, liveSessionId: session.id },
+      orderBy: { liveSeq: "asc" },
+    });
+    const turnIdxByLiveSeq = new Map<number, number>();
+    for (const turn of existingLiveTurns) {
+      if (turn.liveSeq !== null) turnIdxByLiveSeq.set(turn.liveSeq, turn.idx);
+    }
+
+    if (turnIdxByLiveSeq.size < segments.length) {
+      const maxIdx = await prisma.transcriptTurn.aggregate({
+        where: { meetingId: session.meetingId },
+        _max: { idx: true },
+      });
+      let nextIdx = (maxIdx._max.idx ?? -1) + 1;
+      for (const segment of segments) {
+        if (turnIdxByLiveSeq.has(segment.seq)) continue;
+        await prisma.transcriptTurn.create({
+          data: {
+            meetingId: session.meetingId,
+            participantId: participant.id,
+            idx: nextIdx++,
+            startMs: segment.startMs,
+            endMs: segment.endMs,
+            text: segment.text,
+            asrConfidence: segment.confidence,
+            needsReview: segment.needsReview,
+            liveSessionId: session.id,
+            liveSeq: segment.seq,
+          },
+        });
+        turnIdxByLiveSeq.set(segment.seq, nextIdx - 1);
+      }
+    }
+
+    const fallbackIdx = turnIdxByLiveSeq.get(segments[0].seq);
+    if (fallbackIdx === undefined) throw new Error("实时话轮落库失败，无法生成引用");
+    const sourceIdxOf = (liveSeq: number) => turnIdxByLiveSeq.get(liveSeq) ?? fallbackIdx;
+
+    // 2. 合并增量条目成最终纪要草案；引用使用正式 TranscriptTurn.idx，而不是 LiveSegment 局部序号。
+    const draft: MinutesDraft = {
+      overview: buildOverview(segments.length, items),
+      decisions: items
+        .filter((i) => i.kind === "decision")
+        .map((i) => ({ content: i.content, sourceTurnIdx: sourceIdxOf(i.fromTurnSeq) })),
+      actionItems: items
+        .filter((i) => i.kind === "action_item")
+        .map((i) => ({
+          content: i.content,
+          owner: i.owner ?? undefined,
+          dueAt: i.dueAt ?? undefined,
+          sourceTurnIdx: sourceIdxOf(i.fromTurnSeq),
+        })),
+      risks: items
+        .filter((i) => i.kind === "risk")
+        .map((i) => ({
+          content: i.content,
+          severity: (i.severity as "low" | "medium" | "high") ?? "medium",
+          sourceTurnIdx: sourceIdxOf(i.fromTurnSeq),
+        })),
+    };
+
+    const validated = validateDraft(draft);
+    const saved = await saveMinutes(toolCtx, validated);
+
+    await prisma.liveSession.update({
+      where: { id: sessionId },
+      data: { status: "ended", endedAt: new Date() },
+    });
+    runBus.publish(session.meetingId, { type: "live:ended", sessionId, at: Date.now() });
+    runBus.publish(session.meetingId, { type: "done", meetingId: session.meetingId, at: Date.now() });
+    await audit(toolCtx, "live.session.ended", { sessionId, segments: segments.length }, session.meetingId);
+
+    return { ok: true, minutesId: saved.minutesId, segments: segments.length, items: items.length };
+  } catch (e) {
+    await prisma.liveSession.update({
+      where: { id: sessionId },
+      data: { status: "failed", error: (e as Error).message, endedAt: new Date() },
+    }).catch(() => {});
+    throw e;
   }
-
-  // 2. 合并增量条目成最终纪要草案
-  const draft: MinutesDraft = {
-    overview: buildOverview(segments.length, items),
-    decisions: items
-      .filter((i) => i.kind === "decision")
-      .map((i) => ({ content: i.content, sourceTurnIdx: seqToIdx(i.fromTurnSeq, segments.length) })),
-    actionItems: items
-      .filter((i) => i.kind === "action_item")
-      .map((i) => ({
-        content: i.content,
-        owner: i.owner ?? undefined,
-        dueAt: i.dueAt ?? undefined,
-        sourceTurnIdx: seqToIdx(i.fromTurnSeq, segments.length),
-      })),
-    risks: items
-      .filter((i) => i.kind === "risk")
-      .map((i) => ({
-        content: i.content,
-        severity: (i.severity as "low" | "medium" | "high") ?? "medium",
-        sourceTurnIdx: seqToIdx(i.fromTurnSeq, segments.length),
-      })),
-  };
-
-  const validated = validateDraft(draft);
-  const saved = await saveMinutes(toolCtx, validated);
-
-  await prisma.liveSession.update({
-    where: { id: sessionId },
-    data: { status: "ended", endedAt: new Date() },
-  });
-  runBus.publish(session.meetingId, { type: "live:ended", sessionId, at: Date.now() });
-  runBus.publish(session.meetingId, { type: "done", meetingId: session.meetingId, at: Date.now() });
-  await audit(toolCtx, "live.session.ended", { sessionId, segments: segments.length }, session.meetingId);
-
-  return { ok: true, minutesId: saved.minutesId, segments: segments.length, items: items.length };
-}
-
-function seqToIdx(seq: number, total: number) {
-  return Math.max(0, Math.min(seq, total - 1));
 }
 
 function buildOverview(count: number, items: { kind: string }[]) {

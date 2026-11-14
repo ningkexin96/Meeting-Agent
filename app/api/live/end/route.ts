@@ -20,7 +20,7 @@ export async function POST(req: Request) {
       userId: session.userId,
       role: session.role,
     });
-    return NextResponse.json(result);
+    return NextResponse.json(result, { status: result.ok ? 200 : 400 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }

@@ -16,7 +16,11 @@ export default async function VoiceprintsPage() {
         subtitle="区分「有几个人」已支持；识别「这是谁」需外部声纹服务，或在会议中手动标注"
       />
 
-      <VoiceprintPanel canEdit={canEdit} />
+      <VoiceprintPanel
+        canEdit={canEdit}
+        currentUserId={session.userId}
+        canManageOthers={session.role === "owner"}
+      />
     </div>
   );
 }

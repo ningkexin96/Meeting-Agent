@@ -44,6 +44,40 @@ export function cosine(a: number[], b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
+/** Embedding 只是索引副本；返回前必须回查权威表，过滤已删除/已遗忘对象。 */
+async function filterAuthoritativeHits(tenantId: string, hits: RecallHit[]): Promise<RecallHit[]> {
+  const idsOf = (type: IndexObjectType) => hits.filter((h) => h.objectType === type).map((h) => h.objectId);
+  const [memories, decisions, turns, summaries] = await Promise.all([
+    prisma.memory.findMany({
+      where: { tenantId, id: { in: idsOf("memory") }, status: { in: ["active", "proposed"] } },
+      select: { id: true, content: true, meetingId: true },
+    }),
+    prisma.decision.findMany({
+      where: { id: { in: idsOf("decision") }, minutes: { meeting: { tenantId } } },
+      select: { id: true, content: true, minutes: { select: { meetingId: true } } },
+    }),
+    prisma.transcriptTurn.findMany({
+      where: { id: { in: idsOf("turn") }, meeting: { tenantId } },
+      select: { id: true, text: true, meetingId: true },
+    }),
+    prisma.summary.findMany({
+      where: { id: { in: idsOf("summary") }, meeting: { tenantId } },
+      select: { id: true, content: true, meetingId: true },
+    }),
+  ]);
+
+  const authoritative = new Map<string, { content: string; meetingId: string | null }>();
+  for (const m of memories) authoritative.set(`memory:${m.id}`, { content: m.content, meetingId: m.meetingId });
+  for (const d of decisions) authoritative.set(`decision:${d.id}`, { content: d.content, meetingId: d.minutes.meetingId });
+  for (const t of turns) authoritative.set(`turn:${t.id}`, { content: t.text, meetingId: t.meetingId });
+  for (const s of summaries) authoritative.set(`summary:${s.id}`, { content: s.content, meetingId: s.meetingId });
+
+  return hits.flatMap((hit) => {
+    const current = authoritative.get(`${hit.objectType}:${hit.objectId}`);
+    return current ? [{ ...hit, content: current.content, meetingId: current.meetingId }] : [];
+  });
+}
+
 /** 批量建索引（幂等：同一对象重复索引会覆盖） */
 export async function indexObjects(items: IndexInput[]): Promise<number> {
   if (items.length === 0) return 0;
@@ -261,7 +295,9 @@ export async function hybridRecall(
     if (hit.via.length === 2) hit.score *= 1.2;
   }
 
-  return [...fused.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+  const ordered = [...fused.values()].sort((a, b) => b.score - a.score);
+  const authoritative = await filterAuthoritativeHits(tenantId, ordered);
+  return authoritative.slice(0, limit);
 }
 
 /** 会议结束后统一建索引（话轮 + 摘要 + 决议） */

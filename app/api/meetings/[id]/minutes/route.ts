@@ -4,6 +4,8 @@ import { guard } from "@/lib/auth/guard";
 import { prisma } from "@/lib/db/client";
 import { audit } from "@/lib/db/scoped";
 
+const MINUTES_STATUSES = new Set(["draft", "confirmed"]);
+
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const g = await guard("minutes:edit");
   if (!g.ok) return g.response;
@@ -20,30 +22,86 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     minutesStatus?: string;
   };
 
-  if (body.actionItemId) {
-    const updated = await prisma.actionItem.update({
-      where: { id: body.actionItemId },
-      data: {
-        ...(body.owner !== undefined ? { owner: body.owner || null } : {}),
-        ...(body.dueAt !== undefined ? { dueAt: body.dueAt || null } : {}),
-      },
-    });
-    await prisma.actionItem.update({
-      where: { id: updated.id },
-      data: { unresolved: !updated.owner || !updated.dueAt },
-    });
-    await prisma.minutes.updateMany({
-      where: { meetingId: meeting.id },
-      data: { editedBy: session.userId },
-    });
-    await audit(session, "minutes.action_item.updated", { id: updated.id }, meeting.id);
+  if (body.owner !== undefined && typeof body.owner !== "string") {
+    return NextResponse.json({ error: "owner 必须是字符串" }, { status: 400 });
+  }
+  if (body.dueAt !== undefined && typeof body.dueAt !== "string") {
+    return NextResponse.json({ error: "dueAt 必须是字符串" }, { status: 400 });
+  }
+  if (body.minutesStatus !== undefined && !MINUTES_STATUSES.has(body.minutesStatus)) {
+    return NextResponse.json({ error: "minutesStatus 只能是 draft 或 confirmed" }, { status: 400 });
   }
 
-  if (body.minutesStatus) {
-    await prisma.minutes.updateMany({
-      where: { meetingId: meeting.id },
-      data: { status: body.minutesStatus },
+  let actionItemId: string | null = null;
+  let notFound = false;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (body.actionItemId) {
+        // 关键权限边界：不能只信 URL 里的 meetingId。
+        // ActionItem 必须同时属于该 URL 会议和当前租户，否则就是跨租户 IDOR。
+        const existing = await tx.actionItem.findFirst({
+          where: {
+            id: body.actionItemId,
+            minutes: {
+              meetingId: meeting.id,
+              meeting: { tenantId: session.tenantId },
+            },
+          },
+          select: { id: true, owner: true, dueAt: true },
+        });
+        if (!existing) {
+          notFound = true;
+          return;
+        }
+
+        const owner = body.owner !== undefined ? body.owner || null : existing.owner;
+        const dueAt = body.dueAt !== undefined ? body.dueAt || null : existing.dueAt;
+        const updated = await tx.actionItem.updateMany({
+          where: {
+            id: existing.id,
+            minutes: {
+              meetingId: meeting.id,
+              meeting: { tenantId: session.tenantId },
+            },
+          },
+          data: {
+            owner,
+            dueAt,
+            unresolved: !owner || !dueAt,
+          },
+        });
+        if (updated.count !== 1) {
+          notFound = true;
+          return;
+        }
+
+        await tx.minutes.updateMany({
+          where: { meetingId: meeting.id },
+          data: { editedBy: session.userId },
+        });
+        actionItemId = existing.id;
+      }
+
+      if (body.minutesStatus) {
+        await tx.minutes.updateMany({
+          where: { meetingId: meeting.id },
+          data: { status: body.minutesStatus },
+        });
+      }
     });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message || "保存失败" }, { status: 500 });
+  }
+
+  if (notFound) {
+    return NextResponse.json({ error: "待办不存在或不属于当前会议" }, { status: 404 });
+  }
+
+  if (actionItemId) {
+    await audit(session, "minutes.action_item.updated", { id: actionItemId }, meeting.id);
+  }
+  if (body.minutesStatus) {
     await audit(session, "minutes.status.changed", { status: body.minutesStatus }, meeting.id);
   }
 

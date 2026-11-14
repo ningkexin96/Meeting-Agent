@@ -4,7 +4,7 @@ import { guard } from "@/lib/auth/guard";
 import { listVoiceprints, registerVoiceprint, deleteVoiceprint } from "@/lib/voice/store";
 import { getEmbedder } from "@/lib/voice/embedder";
 import { prisma } from "@/lib/db/client";
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { audit } from "@/lib/db/scoped";
 
@@ -33,6 +33,11 @@ export async function POST(req: Request) {
   const form = await req.formData();
   const audio = form.get("audio");
   const targetUserId = String(form.get("userId") ?? "") || session.userId;
+
+  // 声纹属于敏感生物特征：普通 member 只能注册自己的，owner 才能代注册。
+  if (targetUserId !== session.userId && session.role !== "owner") {
+    return NextResponse.json({ error: "只能注册本人的声纹" }, { status: 403 });
+  }
 
   if (!audio || typeof audio === "string" || audio.size === 0) {
     return NextResponse.json({ error: "请上传一段说话音频" }, { status: 400 });
@@ -66,6 +71,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, userId: target.id, name: target.name, ...res });
   } catch (e) {
     return NextResponse.json({ error: `声纹提取失败：${(e as Error).message}` }, { status: 500 });
+  } finally {
+    // 原始声纹音频只用于本次特征提取，不长期保留。
+    await unlink(abs).catch(() => {});
   }
 }
 
@@ -76,6 +84,9 @@ export async function DELETE(req: Request) {
   const { searchParams } = new URL(req.url);
   const userId = searchParams.get("userId");
   if (!userId) return NextResponse.json({ error: "缺少 userId" }, { status: 400 });
+  if (userId !== session.userId && session.role !== "owner") {
+    return NextResponse.json({ error: "只能删除本人的声纹" }, { status: 403 });
+  }
 
   const target = await prisma.user.findFirst({
     where: { id: userId, tenantId: session.tenantId },

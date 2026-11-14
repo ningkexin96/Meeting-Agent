@@ -26,6 +26,9 @@ export function useLiveRecorder(options: {
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
+  const uploadsRef = useRef<Set<Promise<void>>>(new Set());
+  const stopResolveRef = useRef<(() => void) | null>(null);
   const seqRef = useRef(0);
   const startedAtRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -40,30 +43,37 @@ export function useLiveRecorder(options: {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     recorderRef.current = null;
+    activeSessionIdRef.current = null;
   }, []);
 
   useEffect(() => cleanup, [cleanup]);
 
   const uploadChunk = useCallback(
-    async (blob: Blob, seq: number, startMs: number, endMs: number) => {
-      if (!sessionId) return;
+    (blob: Blob, seq: number, startMs: number, endMs: number): Promise<void> => {
+      const effectiveSessionId = activeSessionIdRef.current ?? sessionId;
+      if (!effectiveSessionId) return Promise.resolve();
       const fd = new FormData();
-      fd.append("sessionId", sessionId);
+      fd.append("sessionId", effectiveSessionId);
       fd.append("seq", String(seq));
       fd.append("startMs", String(Math.round(startMs)));
       fd.append("endMs", String(Math.round(endMs)));
       fd.append("audio", blob, `chunk-${seq}.${blob.type.includes("webm") ? "webm" : "wav"}`);
 
-      setPending((p) => p + 1);
-      try {
-        const res = await fetch("/api/live/chunk", { method: "POST", body: fd });
-        const data = await res.json();
-        onChunkResult?.({ seq, ok: res.ok && data.ok !== false, added: data.added ?? 0, error: data.error });
-      } catch (e) {
-        onChunkResult?.({ seq, ok: false, added: 0, error: (e as Error).message });
-      } finally {
-        setPending((p) => Math.max(0, p - 1));
-      }
+      const task = (async () => {
+        setPending((p) => p + 1);
+        try {
+          const res = await fetch("/api/live/chunk", { method: "POST", body: fd });
+          const data = await res.json();
+          onChunkResult?.({ seq, ok: res.ok && data.ok !== false, added: data.added ?? 0, error: data.error });
+        } catch (e) {
+          onChunkResult?.({ seq, ok: false, added: 0, error: (e as Error).message });
+        } finally {
+          setPending((p) => Math.max(0, p - 1));
+        }
+      })();
+      uploadsRef.current.add(task);
+      void task.finally(() => uploadsRef.current.delete(task));
+      return task;
     },
     [sessionId, onChunkResult],
   );
@@ -98,8 +108,10 @@ export function useLiveRecorder(options: {
           void uploadChunk(blob, seq, startMs, endMs);
         }
       }
-      // 继续切下一片
+      // 继续切下一片；如果是主动结束，先唤醒 stop()，再由 stop() 等待上传完成。
       if (!stoppedRef.current) startSegment();
+      stopResolveRef.current?.();
+      stopResolveRef.current = null;
     };
 
     recorder.start();
@@ -108,8 +120,14 @@ export function useLiveRecorder(options: {
     }, chunkMs);
   }, [chunkMs, uploadChunk]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (sessionIdOverride?: string) => {
     if (state === "recording") return;
+    const effectiveSessionId = sessionIdOverride ?? sessionId;
+    if (!effectiveSessionId) {
+      setError("实时会话尚未创建");
+      return;
+    }
+    activeSessionIdRef.current = effectiveSessionId;
     setError(null);
     stoppedRef.current = false;
     try {
@@ -132,17 +150,30 @@ export function useLiveRecorder(options: {
       setError(`无法访问麦克风：${(e as Error).message}`);
       setState("idle");
     }
-  }, [state, startSegment]);
+  }, [state, startSegment, sessionId]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback(async (): Promise<boolean> => {
     stoppedRef.current = true;
     if (rotateRef.current) clearTimeout(rotateRef.current);
     if (timerRef.current) clearInterval(timerRef.current);
+
     const recorder = recorderRef.current;
-    if (recorder && recorder.state === "recording") recorder.stop();
+    if (recorder && recorder.state === "recording") {
+      await new Promise<void>((resolve) => {
+        stopResolveRef.current = resolve;
+        recorder.stop();
+      });
+    }
+    stopResolveRef.current = null;
+
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setState("stopped");
+
+    // 最后一片可能刚刚触发上传；必须等它完成，才能调用结束合并。
+    await Promise.allSettled([...uploadsRef.current]);
+    activeSessionIdRef.current = null;
+    return true;
   }, []);
 
   return { state, error, chunkCount, pending, elapsedMs, start, stop };
