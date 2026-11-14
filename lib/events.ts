@@ -1,4 +1,4 @@
-// 事件总线：状态机 → SSE → 前端运行视图（对应 issue #11）
+// 事件总线：状态机 / 实时流 → SSE → 前端（对应 issue #11 #26）
 export type AgentStage =
   | "PREPARING"
   | "SUMMARIZING"
@@ -7,12 +7,38 @@ export type AgentStage =
   | "DONE"
   | "FAILED";
 
+/** 实时转写片段（issue #26） */
+export type LiveSegmentPayload = {
+  seq: number;
+  speakerLabel: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+  confidence: number;
+  needsReview: boolean;
+};
+
+/** 增量纪要条目（issue #26） */
+export type LiveMinutePayload = {
+  id: string;
+  kind: "decision" | "action_item" | "risk";
+  content: string;
+  owner?: string | null;
+  dueAt?: string | null;
+  severity?: string;
+};
+
 export type RunEvent =
   | { type: "stage"; stage: AgentStage; note?: string; at: number }
   | { type: "tool"; tool: string; args: Record<string, unknown>; ok: boolean; at: number }
   | { type: "text"; text: string; at: number }
   | { type: "error"; message: string; at: number }
-  | { type: "done"; meetingId: string; at: number };
+  | { type: "done"; meetingId: string; at: number }
+  // ---- 实时流（issue #26）----
+  | { type: "live:segment"; segment: LiveSegmentPayload; at: number }
+  | { type: "live:minutes"; items: LiveMinutePayload[]; at: number }
+  | { type: "live:chunk"; seq: number; status: "pending" | "transcribed" | "failed"; error?: string; at: number }
+  | { type: "live:ended"; sessionId: string; at: number };
 
 type Listener = (e: RunEvent) => void;
 

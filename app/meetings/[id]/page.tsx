@@ -43,6 +43,13 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
             {meeting.error ? ` · 错误：${meeting.error}` : ""}
           </p>
         </div>
+        <Link
+          href={`/meetings/${meeting.id}/live`}
+          className="btn-ghost text-xs"
+          title="会议进行中边说边出纪要"
+        >
+          ● 实时模式
+        </Link>
       </div>
 
       <AgentRunner meetingId={meeting.id} role={session.role} initialStage={meeting.stage} />
