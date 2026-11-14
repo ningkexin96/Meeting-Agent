@@ -161,31 +161,59 @@ async function minuteChildIds(minutesId: string) {
 
 /** 增量记忆（issue #15）：mem0 风格 ADD / UPDATE / NOOP */
 export async function rememberFromMinutes(ctx: ToolContext, draft: MinutesDraft) {
-  const items: { kind: string; content: string; importance: number }[] = [];
+  // 分类映射（对应记忆管理的四类）：
+  //   决议 → decision（会上拍板的事，最重要的记忆）
+  //   风险 → open_loop（未闭环的风险，需要后续跟进）
+  //   待办 → open_loop 也合适，但为了避免记忆过载，这里只沉淀决议与风险
+  const items: { kind: string; title: string; content: string; importance: number }[] = [];
   for (const d of draft.decisions) {
-    items.push({ kind: "fact", content: `决议：${d.content}`, importance: 0.8 });
+    items.push({
+      kind: "decision",
+      // 标题留空：决议内容本身通常不长，再截断一遍会和正文重复
+      title: "",
+      content: d.content,
+      importance: 0.85,
+    });
   }
   for (const r of draft.risks) {
-    items.push({ kind: "recurring_issue", content: `风险：${r.content}`, importance: 0.6 });
+    items.push({
+      kind: "open_loop",
+      // 风险类给个简短标题，便于在列表中区分「风险」与「决议」
+      title: "风险",
+      content: r.content,
+      importance: r.severity === "high" ? 0.75 : 0.55,
+    });
   }
 
   let added = 0;
   let noop = 0;
   for (const item of items) {
+    // 去重：同租户下内容完全相同即视为已有
     const dup = await prisma.memory.findFirst({
-      where: { tenantId: ctx.tenantId, content: item.content },
+      where: { tenantId: ctx.tenantId, content: item.content, status: { not: "deleted" } },
     });
     if (dup) {
       noop++;
       continue;
     }
-    await prisma.memory.create({
+    const created = await prisma.memory.create({
       data: {
         tenantId: ctx.tenantId,
         meetingId: ctx.meetingId,
         kind: item.kind,
+        status: "active",
+        title: item.title || null,
         content: item.content,
         importance: item.importance,
+        source: "agent_runtime",
+      },
+    });
+    await prisma.memoryChange.create({
+      data: {
+        memoryId: created.id,
+        changeType: "create",
+        after: JSON.stringify({ kind: item.kind, content: item.content }),
+        reason: `来自会议 ${ctx.meetingId} 的纪要`,
       },
     });
     added++;

@@ -10,6 +10,7 @@ import {
   LogOut,
   MessageSquareText,
   Mic,
+  Brain,
   PanelLeftClose,
   PanelLeftOpen,
   Sparkles,
@@ -24,6 +25,7 @@ const NAV = [
   { href: "/", label: "会议列表", icon: CalendarDays, exact: true },
   { href: "/ask", label: "跨会议追问", icon: MessageSquareText },
   { href: "/voiceprints", label: "说话人识别", icon: Mic },
+  { href: "/memory", label: "记忆管理", icon: Brain },
 ];
 
 const ROLE_LABEL: Record<string, string> = {

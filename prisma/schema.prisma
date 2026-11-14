@@ -57,7 +57,7 @@ model Voiceprint {
   samples    Int      @default(1) // 同一用户多条声纹时的样本数，取质心
   source     String   @default("registration")
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @updatedAt @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -198,19 +198,50 @@ model Citation {
   @@index([targetType, targetId])
 }
 
+// 长期记忆 —— 参考 Miniclaw 的 workspace memory 设计
+//
+// 关键设计：记忆不是只增不减的堆积，而是可被质疑、淘汰、追溯的。
+// - kind：区分事实 / 决议 / 经验 / 未闭环事项
+// - status：active 生效 / proposed 待确认 / conflicted 冲突 / superseded 已过时 / deleted 已遗忘
+// - source：区分是用户手动添加还是 Agent 自动沉淀
+// - MemoryChange：记录每次变更，支持追溯"这条记忆是怎么来的、谁改的"
 model Memory {
-  id        String   @id @default(cuid())
-  tenantId  String
-  meetingId String?
-  kind      String // fact | preference | recurring_issue
-  content   String
-  importance Float   @default(0.5)
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  tenantId   String
+  meetingId  String?
+  kind       String   @default("fact") // fact | decision | lesson | open_loop
+  status     String   @default("active") // active | proposed | conflicted | superseded | deleted
+  title      String?
+  content    String
+  importance Float    @default(0.5)
+  source     String   @default("agent_runtime") // web_user | agent_runtime | migration
+  createdBy  String?
+  updatedAt  DateTime @updatedAt @default(now())
+  createdAt  DateTime @default(now())
 
-  tenant  Tenant   @relation(fields: [tenantId], references: [id])
-  meeting Meeting? @relation(fields: [meetingId], references: [id])
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  meeting  Meeting?        @relation(fields: [meetingId], references: [id])
+  changes  MemoryChange[]
 
-  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, kind])
+  @@index([meetingId])
+}
+
+// 记忆变更记录 —— 支持追溯与审计
+model MemoryChange {
+  id         String   @id @default(cuid())
+  memoryId   String
+  changeType String   // create | update | forget | restore
+  before     String?  // 变更前快照(JSON)
+  after      String?  // 变更后快照(JSON)
+  actor      String?  // 操作人
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  memory Memory @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+
+  @@index([memoryId])
 }
 
 // 语义检索向量 —— 对应 issue #25
