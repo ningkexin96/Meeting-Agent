@@ -1,5 +1,8 @@
 "use client";
 
+// 实时会议面板 —— 对应 issue #26
+// 模式：DashScope 实时流式（ASR_PROVIDER=dashscope）优先，否则用本地分片。
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -17,7 +20,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { useLiveRecorder } from "./use-live-recorder";
+import { useRealtimeAsr } from "./use-realtime-asr";
 import { cn, formatMs } from "@/lib/utils";
 
 type Segment = {
@@ -43,35 +46,42 @@ export function LivePanel({
   meetingId,
   canRun,
   lastSessionId,
+  realtime,
 }: {
   meetingId: string;
   canRun: boolean;
   lastSessionId?: string | null;
+  realtime: boolean;
 }) {
   const router = useRouter();
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [items, setItems] = useState<MinuteItem[]>([]);
-  const [failed, setFailed] = useState(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
-  const [ending, setEnding] = useState(false);
   const [ended, setEnded] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
   const restored = useRef(false);
+  const seqRef = useRef(0);
 
-  const onChunkResult = useCallback(
-    (r: { seq: number; ok: boolean; added: number; error?: string }) => {
-      if (!r.ok) {
-        setFailed((n) => n + 1);
-        if (r.error) setHint(`分片 #${r.seq} 失败：${r.error}（已跳过）`);
-      }
-    },
-    [],
-  );
+  // 实时识别结果 → 本地列表
+  const onFinal = useCallback((r: { text: string; beginMs: number; endMs: number }) => {
+    const seq = seqRef.current++;
+    setSegments((prev) => [
+      ...prev,
+      {
+        seq,
+        speakerLabel: "speaker_0",
+        startMs: r.beginMs,
+        endMs: r.endMs,
+        text: r.text,
+        confidence: 0.9,
+        needsReview: false,
+      },
+    ]);
+  }, []);
 
-  const recorder = useLiveRecorder({ sessionId, chunkMs: 4000, onChunkResult });
+  const asr = useRealtimeAsr({ meetingId, handlers: { onFinal } });
 
-  // 恢复上一场会话
+  // 恢复上一场会话内容
   useEffect(() => {
     if (restored.current || !lastSessionId) return;
     restored.current = true;
@@ -81,69 +91,42 @@ export function LivePanel({
       const data = await res.json();
       setSegments(data.segments ?? []);
       setItems(data.items ?? []);
-      setFailed((data.chunks ?? []).filter((c: { status: string }) => c.status === "failed").length);
       setSessionId(lastSessionId);
+      seqRef.current = (data.segments ?? []).length;
       if (data.status === "ended") setEnded(true);
     })();
   }, [lastSessionId]);
 
-  useEffect(() => {
-    if (!sessionId) return;
-    const es = new EventSource(`/api/live/${sessionId}/stream`);
-    esRef.current = es;
-    es.onmessage = (msg) => {
-      try {
-        const e = JSON.parse(msg.data);
-        if (e.type === "live:segment") {
-          setSegments((prev) => (prev.some((s) => s.seq === e.segment.seq) ? prev : [...prev, e.segment]));
-        } else if (e.type === "live:minutes") {
-          setItems((prev) => [...prev, ...e.items]);
-        } else if (e.type === "live:ended") {
-          setEnded(true);
-        } else if (e.type === "text") {
-          setHint(e.text);
-        }
-      } catch {
-        /* 心跳 */
-      }
-    };
-    return () => es.close();
-  }, [sessionId]);
+  const recording = asr.state === "recording";
+  const busy = asr.state === "connecting";
 
-  async function start() {
-    setHint(null);
+  function start() {
     setEnded(false);
-    setSegments([]);
-    setItems([]);
-    setFailed(0);
-    const res = await fetch("/api/live", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ meetingId }),
-    });
-    const data = await res.json();
-    if (!res.ok) return setHint(data.error ?? "开启失败");
-    setSessionId(data.sessionId);
-    await recorder.start();
+    setHint(null);
+    void asr.start();
   }
 
   async function end() {
-    recorder.stop();
-    if (!sessionId) return;
-    setEnding(true);
+    asr.stop();
+    setEnded(true);
+    // 结束实时会话后合并纪要
+    if (!sessionId) {
+      setHint("会话尚未创建，无法合并纪要");
+      return;
+    }
     const res = await fetch("/api/live/end", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId }),
     });
     const data = await res.json();
-    setEnding(false);
-    if (!res.ok) return setHint(data.error ?? "结束失败");
-    setEnded(true);
+    if (!res.ok) {
+      setHint(data.error ?? "合并失败");
+      return;
+    }
     router.refresh();
   }
 
-  const recording = recorder.state === "recording";
   const decisions = items.filter((i) => i.kind === "decision");
   const actions = items.filter((i) => i.kind === "action_item");
   const risks = items.filter((i) => i.kind === "risk");
@@ -162,20 +145,28 @@ export function LivePanel({
                   录音中
                 </Badge>
               )}
+              {busy && (
+                <Badge variant="warning" className="gap-1">
+                  <Loader2 className="size-2.5 animate-spin" />
+                  连接中
+                </Badge>
+              )}
             </CardTitle>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              每 4 秒切一片上传，边说边出转写与增量纪要
+              {realtime
+                ? "麦克风 → 16kHz PCM → DashScope 实时识别，边说边出字"
+                : "当前为分片模式（ASR_PROVIDER 非 dashscope）"}
             </p>
           </div>
-          {!sessionId || ended ? (
-            <Button onClick={start} disabled={!canRun || ending} size="sm">
-              <Mic className="size-3.5" />
-              {ended ? "重新开始" : "开始实时会议"}
+          {recording || busy ? (
+            <Button onClick={end} variant="destructive" size="sm" disabled={busy}>
+              <Square className="size-3.5" />
+              结束并生成纪要
             </Button>
           ) : (
-            <Button onClick={end} disabled={ending} size="sm" variant="destructive">
-              {ending ? <Loader2 className="size-3.5 animate-spin" /> : <Square className="size-3.5" />}
-              {ending ? "合并中…" : "结束并生成纪要"}
+            <Button onClick={start} size="sm" disabled={!canRun}>
+              <Mic className="size-3.5" />
+              {ended ? "重新开始" : "开始实时会议"}
             </Button>
           )}
         </CardHeader>
@@ -186,101 +177,96 @@ export function LivePanel({
               当前角色无权限开启实时会议（需要 owner 或 member）
             </div>
           )}
-          {recorder.error && (
+          {asr.error && (
             <div className="flex items-start gap-1.5 rounded-lg bg-error-bg px-2.5 py-2 text-xs text-error">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-              {recorder.error}
+              {asr.error}
             </div>
           )}
           {hint && (
             <div className="rounded-lg bg-muted px-2.5 py-2 text-xs text-muted-foreground">{hint}</div>
           )}
 
-          {sessionId && (
-            <div className="grid grid-cols-4 gap-2">
-              <Stat icon={Activity} label="已录" value={formatMs(recorder.elapsedMs)} />
-              <Stat icon={Mic} label="分片" value={String(recorder.chunkCount)} />
-              <Stat icon={Loader2} label="上传中" value={String(recorder.pending)} />
-              <Stat icon={TriangleAlert} label="失败" value={String(failed)} danger={failed > 0} />
+          {(recording || busy) && (
+            <div className="grid grid-cols-3 gap-2">
+              <Stat icon={Activity} label="已采集" value={`${asr.pcmSeconds.toFixed(1)}s`} />
+              <Stat icon={Mic} label="已识别" value={String(segments.length)} />
+              <Stat icon={FileText} label="纪要条目" value={String(items.length)} />
+            </div>
+          )}
+
+          {/* 实时中间结果：正在识别的文字 */}
+          {asr.interim && (
+            <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-2">
+              <div className="text-[10px] text-primary/70">正在识别…</div>
+              <div className="mt-0.5 text-[13px] text-muted-foreground">{asr.interim}</div>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {sessionId && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Mic className="size-4 text-primary" />
-                实时转写
-              </CardTitle>
-              <Badge variant="neutral">{segments.length} 条</Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="max-h-[420px] space-y-1.5 overflow-auto pr-1">
-                {segments.length === 0 && (
-                  <div className="py-10 text-center text-xs text-muted-foreground">
-                    开始说话后会实时出现在这里…
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Mic className="size-4 text-primary" />
+              实时转写
+            </CardTitle>
+            <Badge variant="neutral">{segments.length} 条</Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-[420px] space-y-1.5 overflow-auto pr-1">
+              {segments.length === 0 && (
+                <div className="py-10 text-center text-xs text-muted-foreground">
+                  开始说话后会实时出现在这里…
+                </div>
+              )}
+              {segments.map((s) => (
+                <div key={s.seq} className="animate-fade-in rounded-lg bg-primary/5 px-2.5 py-2 ring-1 ring-primary/15">
+                  <div className="flex justify-between text-[11px] text-muted-foreground">
+                    <span>#{s.seq}</span>
+                    <span className="font-mono">{formatMs(s.startMs)}</span>
                   </div>
-                )}
-                {segments.map((s) => (
-                  <div key={s.seq} className="animate-fade-in rounded-lg bg-primary/5 px-2.5 py-2 ring-1 ring-primary/15">
-                    <div className="flex justify-between text-[11px] text-muted-foreground">
-                      <span>#{s.seq}</span>
-                      <span className="font-mono">{formatMs(s.startMs)}</span>
-                    </div>
-                    <div className="mt-0.5 text-[13px] leading-relaxed">{s.text}</div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+                  <div className="mt-0.5 text-[13px] leading-relaxed">{s.text}</div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <FileText className="size-4 text-primary" />
-                增量纪要
-              </CardTitle>
-              <Badge variant="neutral">{items.length} 条</Badge>
-            </CardHeader>
-            <CardContent>
-              <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
-                {items.length === 0 && (
-                  <div className="py-10 text-center text-xs text-muted-foreground">
-                    每积累 4 条转写会抽一次，随会议进行逐渐出现…
-                  </div>
-                )}
-                <Group icon={Gavel} title="决议" tone="text-success" items={decisions} />
-                <Group icon={ListTodo} title="待办" tone="text-primary" items={actions} />
-                <Group icon={ShieldAlert} title="风险" tone="text-error" items={risks} />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FileText className="size-4 text-primary" />
+              增量纪要
+            </CardTitle>
+            <Badge variant="neutral">{items.length} 条</Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="max-h-[420px] space-y-3 overflow-auto pr-1">
+              {items.length === 0 && (
+                <div className="py-10 text-center text-xs text-muted-foreground">
+                  结束会议后会在会议详情页生成完整纪要
+                </div>
+              )}
+              <Group icon={Gavel} title="决议" tone="text-success" items={decisions} />
+              <Group icon={ListTodo} title="待办" tone="text-primary" items={actions} />
+              <Group icon={ShieldAlert} title="风险" tone="text-error" items={risks} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
 
       {ended && (
         <div className="rounded-lg bg-success-bg px-3 py-2 text-sm text-success">
-          实时会议已结束，纪要已合并到会议详情页。可点击条目上的引用回看原话。
+          实时会议已结束，纪要已合并到会议详情页。
         </div>
       )}
     </div>
   );
 }
 
-function Stat({
-  icon: Icon,
-  label,
-  value,
-  danger,
-}: {
-  icon: typeof Activity;
-  label: string;
-  value: string;
-  danger?: boolean;
-}) {
+function Stat({ icon: Icon, label, value, danger }: { icon: typeof Activity; label: string; value: string; danger?: boolean }) {
   return (
     <div className="rounded-lg bg-muted/50 px-2.5 py-2">
       <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -292,17 +278,7 @@ function Stat({
   );
 }
 
-function Group({
-  icon: Icon,
-  title,
-  tone,
-  items,
-}: {
-  icon: typeof Gavel;
-  title: string;
-  tone: string;
-  items: MinuteItem[];
-}) {
+function Group({ icon: Icon, title, tone, items }: { icon: typeof Gavel; title: string; tone: string; items: MinuteItem[] }) {
   if (items.length === 0) return null;
   return (
     <div>

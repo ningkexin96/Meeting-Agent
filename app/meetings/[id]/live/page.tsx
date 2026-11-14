@@ -57,6 +57,7 @@ export default async function LivePage({ params }: { params: Promise<{ id: strin
         meetingId={meeting.id}
         canRun={canRun}
         lastSessionId={lastSession?.id ?? null}
+        realtime={process.env.ASR_PROVIDER === "dashscope"}
       />
 
       <Card size="sm">
