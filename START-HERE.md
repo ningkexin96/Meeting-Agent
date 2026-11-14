@@ -230,6 +230,37 @@ node scripts/reset-demo.mjs
 - `pnpm dev` 模式：等几秒自动刷新，不行就 Ctrl+C 重启
 - `pnpm start` 模式：要先 `pnpm build` 再重启
 
+**Q: 页面变成纯文字，没有任何样式，按钮点了没反应**
+
+这是 .next 构建产物损坏导致的——最典型的表现是页面结构在、CSS 全丢。
+
+先确认：
+```powershell
+Test-Path .next\BUILD_ID
+```
+
+如果返回 `False`，说明构建不完整（通常是构建进程被中途杀掉、或磁盘变动导致）。修复：
+
+```powershell
+# 1. 停掉所有 node 进程
+Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# 2. 删掉损坏的构建目录
+Remove-Item -Recurse -Force .next
+
+# 3. 重新构建（约 5 分钟）
+pnpm build
+
+# 4. 启动
+pnpm start -p 3210
+```
+
+验证修复：打开浏览器 F12 → Network，看 `/_next/static/css/*.css` 是否返回 200。
+如果是 400 或 404，说明构建还是坏的，重复上面步骤。
+
+> 更省事的替代方案：直接用 `pnpm dev`（开发模式），它不依赖预构建，改代码还会热更新。
+> 代价是首次访问每个页面要等几秒编译。
+
 **Q: 端口被占用**
 换端口：`pnpm start -p 3220`（记得改访问地址）
 
