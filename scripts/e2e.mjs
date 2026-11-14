@@ -29,7 +29,23 @@ async function login(email) {
 }
 
 async function main() {
-  console.log("== 1. 登录与 RBAC ==");
+  // 主链路测试依赖 mock 模式（无音频也能产出预置转写）。
+// 若切到 dashscope 等真实 ASR，必须先有音频，否则转写阶段会失败——这是预期行为。
+const cfgRes = await fetch(`${BASE}/api/diag/llm`);
+const cfg = await cfgRes.json();
+if (cfg.config?.mock === false) {
+  console.log("提示：当前不是 MOCK_LLM=1。主链路测试假定 ASR 为 mock 且有预置转写。");
+}
+const asrProbe = await fetch(`${BASE}/api/diag/asr`).catch(() => null);
+if (asrProbe?.ok) {
+  const asr = await asrProbe.json();
+  if (asr.provider && asr.provider !== "mock") {
+    console.log(`⚠️  当前 ASR_PROVIDER=${asr.provider}，主链路测试会因无音频而失败（预期）。`);
+    console.log("   跑本测试前请设置 ASR_PROVIDER=mock 并重启。\n");
+  }
+}
+
+console.log("== 1. 登录与 RBAC ==");
   const ownerCookie = await login("owner@demo.dev");
   const viewerCookie = await login("viewer@demo.dev");
   ok("owner 登录成功", ownerCookie.includes("ma_user="));

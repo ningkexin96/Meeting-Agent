@@ -5,7 +5,7 @@
 // 这是业界最稳的做法之一，也能在二面讲清楚「为什么不用简单加权求和」。
 import { prisma } from "@/lib/db/client";
 import { getEmbeddingProvider } from "./embedding";
-import { extractKeywords } from "@/lib/tools/keywords";
+import { extractWeightedKeywords } from "@/lib/tools/keywords";
 
 export type IndexObjectType = "turn" | "summary" | "memory" | "decision";
 
@@ -90,19 +90,36 @@ export async function indexObjects(items: IndexInput[]): Promise<number> {
  * 正文只要擦到「时间」一个词就能得 1/6 ≈ 0.17，在长文档里几乎必然发生。
  * 改成绝对命中数后，只擦到一个词的内容分数恒为 1，跨查询可比，门槛才有意义。
  */
+/**
+ * 关键词召回：按「命中的词权重之和」打分。
+ *
+ * 为什么不用命中个数或比例：
+ *   「量子计算什么时候上线」会命中「先上线录音上传」里的「上线」——
+ *   字面重合但语义无关。给通用词低权重后，这种擦边匹配得分很低，
+ *   配合后续的强关键词阈值就能被正确过滤掉。
+ */
 function keywordRecall(
   query: string,
   rows: { objectType: string; objectId: string; content: string }[],
-): { objectId: string; score: number; hits: number }[] {
-  const kws = extractKeywords(query);
+): { objectId: string; score: number; hits: number; weighted: number }[] {
+  const kws = extractWeightedKeywords(query);
   if (kws.length === 0) return [];
+
+  const totalWeight = kws.reduce((s, k) => s + k.weight, 0) || 1;
+
   return rows
     .map((r) => {
-      const hits = kws.filter((k) => r.content.includes(k)).length;
-      return { objectId: r.objectId, hits, score: hits / kws.length };
+      const matched = kws.filter((k) => r.content.includes(k.term));
+      const weighted = matched.reduce((s, k) => s + k.weight, 0);
+      return {
+        objectId: r.objectId,
+        hits: matched.length,
+        weighted,
+        score: weighted / totalWeight,
+      };
     })
     .filter((r) => r.hits > 0)
-    .sort((a, b) => b.hits - a.hits || b.score - a.score);
+    .sort((a, b) => b.weighted - a.weighted || b.hits - a.hits);
 }
 
 /** 向量召回：从库里取全部向量后算余弦（十几人规模足够） */
@@ -169,20 +186,39 @@ export async function hybridRecall(
   //   A. 关键词有「多词命中」（≥ 2 个不同词）→ 向量只作补充，用相对阈值放宽召回
   //   B. 关键词弱（只擦到 1 个词）或没命中 → 向量必须自己够强，否则不召回
   //      「把无关内容当依据」正是幻觉的来源，宁可少召回。
-  const strongKeyword = kw.some((k) => k.hits >= 2);
+  // 强关键词判定改用「权重之和 ≥ 1.0」：
+// 单靠一个通用词（上线/功能/时间，权重 0.2）或一个领域词（转写，0.5）
+// 都不足以成立，至少要两个有效词或一个完整实词。
+  // 语义闸门：向量分再高，如果查询里的「实词」（权重 1.0 的词）
+// 一个都没在正文出现，说明只是局部字面重合（如「量子计算…上线」vs「先上线录音」），
+// 这种命中必须丢掉——把无关内容当依据正是幻觉的来源。
+  function passesSemanticGate(queryTerms: { term: string; weight: number }[], content: string): boolean {
+    const contentWords = queryTerms.filter((k) => k.weight >= 1.0);
+    if (contentWords.length === 0) return true; // 查询本身没有实词，无从判断
+    return contentWords.some((k) => content.includes(k.term));
+  }
+
+  const queryTerms = extractWeightedKeywords(query);
+
+  const strongKeyword = kw.some((k) => k.weighted >= 1.0);
   const relativeMargin = Number(process.env.RAG_RELATIVE_MARGIN ?? 0.5);
   const minVectorScore = Number(process.env.RAG_MIN_VECTOR_SCORE ?? 0.25);
-  // 关键词最少要命中 2 个不同的词才算有效（1 个词在长文本里几乎必然误中）
-  const minKeywordHits = Number(process.env.RAG_MIN_KEYWORD_HITS ?? 2);
+  // 关键词有效性门槛：权重和低于 0.8 视为「擦边」，不参与融合
+  const minKeywordWeight = Number(process.env.RAG_MIN_KEYWORD_WEIGHT ?? 0.8);
 
   const topScore = rawVec[0]?.score ?? 0;
   const cutoff = strongKeyword
     ? topScore * (1 - relativeMargin) // A：靠关键词保底
     : Math.max(minVectorScore, topScore); // B：向量需自身够强
-  const vec = rawVec.filter((r) => r.score > 0 && r.score >= cutoff);
 
-  // 关键词结果过滤：只擦到 1 个词的不算命中
-  const kwFiltered = kw.filter((k) => k.hits >= minKeywordHits);
+  const vec = rawVec.filter((r) => {
+    if (r.score <= 0 || r.score < cutoff) return false;
+    const row = byId.get(r.objectId);
+    if (!row) return false;
+    return passesSemanticGate(queryTerms, row.content);
+  });
+
+  const kwFiltered = kw.filter((k) => k.weighted >= minKeywordWeight);
 
   const fused = new Map<string, RecallHit>();
 

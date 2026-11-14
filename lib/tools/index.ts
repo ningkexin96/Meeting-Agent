@@ -196,9 +196,11 @@ export async function rememberFromMinutes(ctx: ToolContext, draft: MinutesDraft)
 /**
  * 跨会议召回（issue #16 + #25）：混合召回（关键词 + 向量，RRF 融合）。
  *
- * 顺序：
- * 1. 优先走语义索引（lib/rag）——能处理「排期」≈「上线时间」这类不同说法
- * 2. 索引为空或未启用时，退回纯关键词匹配（保证不依赖索引也能用）
+ * 重要语义区分：
+ * - 语义检索「正常执行但返回 0 条」= 确实没有相关内容，必须直接返回空，
+ *   不能再用粗糙的关键词兜底——否则「量子计算什么时候上线」会因为
+ *   擦到「上线」两个字而召回「先上线录音上传」，把无关内容当依据。
+ * - 只有语义索引「不可用」（抛异常 / 未启用）时才退回纯关键词。
  */
 export async function recallMemory(ctx: TenantScope, query: string, limit = 5) {
   const useSemantic = process.env.SEMANTIC_SEARCH !== "0";
@@ -209,31 +211,32 @@ export async function recallMemory(ctx: TenantScope, query: string, limit = 5) {
         limit,
         objectTypes: ["memory", "decision"],
       });
-      if (hits.length > 0) {
-        // 补充 meeting 标题，前端展示更友好
-        const meetingIds = hits.map((h) => h.meetingId).filter(Boolean) as string[];
-        const meetings = meetingIds.length
-          ? await prisma.meeting.findMany({ where: { id: { in: meetingIds } } })
-          : [];
-        const titleOf = new Map(meetings.map((m) => [m.id, m.title]));
-        return hits.map((h, i) => ({
-          meetingId: h.meetingId ?? "",
-          title:
-            h.objectType === "memory"
-              ? "历史记忆"
-              : (titleOf.get(h.meetingId ?? "") ?? "历史会议"),
-          text: h.content,
-          importance: 1 - i * 0.1,
-          via: h.via,
-          score: Number(h.score.toFixed(4)),
-        }));
-      }
+
+      // 语义检索跑通了：它的结论就是权威结论，0 条就返回 0 条
+      if (hits.length === 0) return [];
+
+      const meetingIds = hits.map((h) => h.meetingId).filter(Boolean) as string[];
+      const meetings = meetingIds.length
+        ? await prisma.meeting.findMany({ where: { id: { in: meetingIds } } })
+        : [];
+      const titleOf = new Map(meetings.map((m) => [m.id, m.title]));
+      return hits.map((h, i) => ({
+        meetingId: h.meetingId ?? "",
+        title:
+          h.objectType === "memory"
+            ? "历史记忆"
+            : (titleOf.get(h.meetingId ?? "") ?? "历史会议"),
+        text: h.content,
+        importance: 1 - i * 0.1,
+        via: h.via,
+        score: Number(h.score.toFixed(4)),
+      }));
     } catch (e) {
-      console.warn(`[recall] 语义检索失败，退回关键词：${(e as Error).message}`);
+      console.warn(`[recall] 语义检索不可用，退回关键词：${(e as Error).message}`);
     }
   }
 
-  // 兜底：纯关键词
+  // 仅当语义索引不可用时才走到这里
   const keywords = extractKeywords(query);
   if (keywords.length === 0) return [];
 
