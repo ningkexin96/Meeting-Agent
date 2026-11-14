@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/client";
 import { LivePanel } from "@/components/live/live-panel";
+import { AudioDiagnostics } from "@/components/live/audio-diagnostics";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { LoginPanel } from "@/components/login-panel";
@@ -60,12 +61,14 @@ export default async function LivePage({ params }: { params: Promise<{ id: strin
         realtime={["dashscope", "qwen"].includes(process.env.ASR_PROVIDER ?? "")}
       />
 
+      <AudioDiagnostics />
+
       <Card size="sm">
         <CardContent className="text-[11px] leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">原理：</span>
-          浏览器每 4 秒切一个完整分片（不是 timeslice，避免后续分片缺 WebM 头无法解码）。
-          服务端逐片调 ASR，按时间偏移累加话轮，跨片时把未结束的句子拼接。
-          增量纪要按窗口抽取并按相似度去重，会议结束才合并写入权威纪要表。
+          浏览器用 AudioWorklet 采集麦克风，以 100ms 为单位产出 16kHz 单声道 PCM，
+          通过 WebSocket 持续推给服务端，服务端转发给云端语音识别，边说边回传结果。
+          会议结束后合并为权威纪要。
         </CardContent>
       </Card>
     </div>

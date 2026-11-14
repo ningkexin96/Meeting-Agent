@@ -99,6 +99,9 @@ export function LivePanel({
 
   const recording = asr.state === "recording";
   const busy = asr.state === "connecting";
+  const paused = asr.state === "paused";
+  // 「在录制但收不到声音」需要明确提示，否则用户只会看到数字不动
+  const noAudio = recording && !asr.audioAlive;
 
   function start() {
     setEnded(false);
@@ -151,6 +154,12 @@ export function LivePanel({
                   连接中
                 </Badge>
               )}
+              {paused && (
+                <Badge variant="warning" className="gap-1">
+                  <TriangleAlert className="size-2.5" />
+                  已暂停
+                </Badge>
+              )}
             </CardTitle>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {realtime
@@ -158,7 +167,7 @@ export function LivePanel({
                 : "当前为分片模式（ASR_PROVIDER 非 dashscope）"}
             </p>
           </div>
-          {recording || busy ? (
+          {recording || busy || paused ? (
             <Button onClick={end} variant="destructive" size="sm" disabled={busy}>
               <Square className="size-3.5" />
               结束并生成纪要
@@ -181,6 +190,30 @@ export function LivePanel({
             <div className="flex items-start gap-1.5 rounded-lg bg-error-bg px-2.5 py-2 text-xs text-error">
               <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
               {asr.error}
+            </div>
+          )}
+
+          {paused && (
+            <div className="flex items-start justify-between gap-2 rounded-lg bg-warning-bg px-2.5 py-2 text-xs text-warning">
+              <span className="flex items-start gap-1.5">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                录音已被浏览器暂停（切到后台或系统休眠时会这样）。点击右侧按钮恢复。
+              </span>
+              <Button size="xs" variant="outline" onClick={() => void asr.resume()}>
+                恢复录音
+              </Button>
+            </div>
+          )}
+
+          {noAudio && (
+            <div className="flex items-start justify-between gap-2 rounded-lg bg-warning-bg px-2.5 py-2 text-xs text-warning">
+              <span className="flex items-start gap-1.5">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                已 3 秒没有收到麦克风声音。请检查：麦克风是否被静音、系统是否切换了输入设备、或浏览器权限被收回。
+              </span>
+              <Button size="xs" variant="outline" onClick={() => void asr.resume()}>
+                重新连接
+              </Button>
             </div>
           )}
           {hint && (
