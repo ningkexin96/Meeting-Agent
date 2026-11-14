@@ -44,8 +44,51 @@ export const realAsr: AsrAdapter = {
   },
 };
 
+/** dashscope：阿里云百炼实时语音识别（WebSocket） */
+export const dashscopeAsr: AsrAdapter = {
+  name: "dashscope",
+  async transcribe(audioPath: string) {
+    const { readFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { existsSync } = await import("node:fs");
+    const { preparePcmForDashScope } = await import("./audio");
+    const { transcribePcm } = await import("./dashscope");
+
+    if (!audioPath) throw new AsrError("该会议没有音频文件，无法调用 ASR");
+
+    const storageDir = path.resolve(process.cwd(), process.env.STORAGE_DIR ?? "./storage");
+    const resolved = path.isAbsolute(audioPath)
+      ? audioPath
+      : existsSync(path.join(storageDir, audioPath))
+        ? path.join(storageDir, audioPath)
+        : path.resolve(audioPath);
+
+    if (!existsSync(resolved)) throw new AsrError("音频文件不存在", resolved);
+
+    const buf = await readFile(resolved);
+    // 格式校验失败会抛出带修复建议的 AudioFormatError
+    const { pcm, info } = preparePcmForDashScope(buf);
+    const turns = await transcribePcm(pcm, info.durationMs);
+
+    if (turns.length === 0) {
+      throw new AsrError("DashScope 没有返回任何识别结果（音频可能无有效语音）");
+    }
+
+    return turns.map((t) => ({
+      speakerLabel: t.speakerLabel,
+      startMs: t.beginMs,
+      endMs: t.endMs,
+      text: t.text,
+      confidence: 0.9,
+    }));
+  },
+};
+
 export function getAsr(): AsrAdapter {
-  return process.env.ASR_PROVIDER === "real" ? realAsr : mockAsr;
+  const kind = process.env.ASR_PROVIDER ?? "mock";
+  if (kind === "dashscope") return dashscopeAsr;
+  if (kind === "real") return realAsr;
+  return mockAsr;
 }
 
 /**
@@ -64,7 +107,7 @@ export async function transcribeWithFallback(
   }
 
   try {
-    return { turns: await adapter.transcribe(audioPath ?? ""), adapter: "real", usedFallback: false };
+    return { turns: await adapter.transcribe(audioPath ?? ""), adapter: adapter.name, usedFallback: false };
   } catch (e) {
     const msg = e instanceof AsrError ? `${e.message}${e.detail ? `：${e.detail}` : ""}` : (e as Error).message;
     const allowFallback = opts.allowFallback ?? process.env.ASR_FALLBACK_TO_MOCK === "1";
