@@ -34,7 +34,9 @@
     "test:ws-audio": "tsx scripts/test-ws-audio.ts",
     "test:memory": "node scripts/test-memory.mjs",
     "test:speaker": "node scripts/test-speaker-naming.mjs",
-    "test:incremental": "tsx scripts/test-incremental-unit.ts"
+    "test:incremental": "tsx scripts/test-incremental-unit.ts",
+    "test:live-e2e": "tsx scripts/test-live-e2e.ts",
+    "test:live-edge": "tsx scripts/test-live-edge.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",
