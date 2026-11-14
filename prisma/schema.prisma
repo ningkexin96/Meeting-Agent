@@ -92,6 +92,13 @@ model Meeting {
   @@index([tenantId])
 }
 
+// 会议参与者 —— 说话人分离只给出编号，真实姓名由用户手动标注
+//
+// 说明：说话人分离回答的是「有几个人」，不回答「这是谁」。
+// 所以 displayName 有两种来源：
+//   - auto：              引擎给的占位名（「说话人 A」「未知参会者 1」）
+//   - manual：            用户在界面上手动命名的真实姓名
+// labeledBy 记录是谁标的，便于追溯。
 model MeetingParticipant {
   id           String  @id @default(cuid())
   meetingId    String
@@ -99,6 +106,10 @@ model MeetingParticipant {
   displayName  String
   speakerLabel String // ASR 输出 speaker_0 / speaker_1 ...
   confidence   Float   @default(1)
+  // 姓名来源：auto | manual
+  nameSource   String  @default("auto")
+  labeledBy    String?
+  labeledAt    DateTime?
 
   meeting Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
   user    User?            @relation(fields: [userId], references: [id])

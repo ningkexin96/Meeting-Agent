@@ -24,7 +24,7 @@ type Session = { name: string; role: string; email: string } | null;
 const NAV = [
   { href: "/", label: "会议列表", icon: CalendarDays, exact: true },
   { href: "/ask", label: "跨会议追问", icon: MessageSquareText },
-  { href: "/voiceprints", label: "说话人识别", icon: Mic },
+  { href: "/voiceprints", label: "说话人识别", icon: Mic },  // 区分说话人 + 声纹预留
   { href: "/memory", label: "记忆管理", icon: Brain },
 ];
 

@@ -32,7 +32,8 @@
     "e2e:skills": "node scripts/e2e-skills.mjs",
     "e2e:diarization": "node scripts/e2e-diarization.mjs",
     "test:ws-audio": "tsx scripts/test-ws-audio.ts",
-    "test:memory": "node scripts/test-memory.mjs"
+    "test:memory": "node scripts/test-memory.mjs",
+    "test:speaker": "node scripts/test-speaker-naming.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",

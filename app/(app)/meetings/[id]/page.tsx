@@ -102,6 +102,7 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
           turns={meeting.turns}
           participants={meeting.participants}
           canEdit={canEdit}
+          meetingId={meeting.id}
         />
         <MinutesView
           meetingId={meeting.id}
