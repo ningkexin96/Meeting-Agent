@@ -1,216 +1,352 @@
-# Meeting Agent · 智能会议纪要 Agent（48h MVP）
+# Meeting Agent · 智能会议纪要
 
-上传会议音频或直接在会中录音 → 实时/离线 ASR 转写 → 声纹识别说话人 → Agent 编排生成结构化纪要 → **每条结论可回溯到原话**。
+把一场会议的音频变成**可追溯、可执行的结构化纪要**。
 
-> 这是「48 小时时间盒内的可演示 MVP」，不是生产系统。
-> 范围合同见 `../meeting-agent-demo/docs/02-mvp-scope.md`，架构说明见 `../meeting-agent-demo/docs/01-architecture.md`。
+上传录音或会中直接录音，系统自动完成语音转写、说话人分离、内容理解，最终产出带责任人和截止时间的决议、待办与风险清单。**每一条结论都能点击跳回原话**。
 
 ---
 
-## 现在的状态
+## 这个项目能做什么
 
-- ✅ **142 项测试全通过**（`pnpm test:all`）
-- ✅ 生产构建通过（`pnpm build`）
-- ✅ 全链路可在 `MOCK_LLM=1` 下离线跑通，不依赖任何外部服务
-- ✅ 真实 ASR / 声纹 / 语义检索 / 模型四条外部依赖均已接入，填 `.env` 即可切换
+### 1. 把音频变成文字
 
-### 三个曾经是 backlog、现已实现的能力
+| 能力 | 说明 |
+|---|---|
+| **离线转写** | 上传音频文件，整段转写成带时间戳的文字 |
+| **实时转写** | 会议进行中边说话边出字，延迟 1~2 秒 |
+| **说话人分离** | 自动区分「有几个不同的人在说话」，标注为说话人 A / B / C |
+| **自动格式转换** | 任意采样率、声道数的音频自动规整成识别服务要求的格式，无需手动转码 |
 
-| 能力 | 说明 | issue |
+支持的音频格式：`wav` `mp3` `m4a` `flac` `webm` `ogg` `opus` 等。
+
+### 2. 把文字变成纪要
+
+系统会从转写内容中自动提取：
+
+- **会议概述** —— 3~5 句话总结达成了什么结论
+- **决议** —— 会上明确拍板的事项
+- **待办** —— 具体行动项，含责任人与截止时间
+- **风险** —— 可能影响交付的问题，标注严重程度
+
+### 3. 每条结论都能回溯原话
+
+这是本项目的核心设计。纪要里每一条内容都可以点击「引用」，页面会跳转到对应的那句原话并高亮显示。
+
+意义在于：**纪要出错时能立刻定位到是转录错了，还是理解错了。**
+
+### 4. 按会议类型调整抽取规则
+
+不同会议关心的内容不一样，系统内置三种「会议类型」（Skill），新建会议时可选：
+
+| 类型 | 适用场景 | 抽取重点 |
 |---|---|---|
-| **真实 ASR** | 支持 OpenAI（whisper 系）与 FunASR 两种上游，失败可降级 | #22 |
-| **声纹识别** | 注册声纹后自动认领说话人，认不出标「待复核」而非硬猜 | #23 |
-| **语义检索** | 关键词 + 向量 RRF 混合召回 | #25 |
-| **实时流式** | 会中边说边出转写与增量纪要，结束后合并成正式纪要 | #26 |
+| **标准会议纪要** | 对齐会、讨论会、跨部门同步 | 拍板决定、有负责人的待办、影响交付的风险 |
+| **研发周会** | Scrum 站会、迭代同步 | 已完成产出、阻塞项、下周计划 |
+| **客户沟通会** | 需求沟通、方案评审 | 客户诉求、我方承诺、商务风险 |
 
-每个 issue 的完整设计、验收标准、踩坑记录都在 [`docs/issues/`](docs/issues/)，
-issue → 代码 → 测试的追溯表见 [`docs/TRACEABILITY.md`](docs/TRACEABILITY.md)。
+类型不同，抽取的侧重点和输出风格都不同。例如研发周会会特别指出「阻塞情况是否明确」。
 
-## 5 分钟跑起来
+### 5. 跨会议追问
+
+可以就历史会议内容提问，例如：
+
+> 「上次关于排期定了什么？」
+
+系统会检索历史纪要与记忆，给出**带引用来源**的答案。**查不到时会明确说「没找到」，不会编造。**
+
+### 6. 多人协作与权限
+
+三层权限控制：
+
+```
+路由守卫（能不能进这个页面）
+    ↓
+工具闸门（能不能调用这个能力）
+    ↓
+数据过滤（只能看到自己租户的数据）
+```
+
+三种角色：
+
+| 角色 | 创建会议 | 触发 Agent | 编辑纪要 | 查看 |
+|---|---|---|---|---|
+| owner | ✅ | ✅ | ✅ | ✅ |
+| member | ✅ | ✅ | ✅ | ✅ |
+| viewer | ❌ | ❌ | ❌ | ✅ |
+
+### 7. 可观测的运行过程
+
+Agent 的每一步都可见：当前处于哪个阶段、调用了哪些工具、模型输出了什么、每个阶段耗时多久。出问题时能直接定位到具体环节。
+
+---
+
+## 快速开始
+
+### 环境要求
+
+- Node.js 18+
+- pnpm 8+
+
+### 安装与启动
 
 ```bash
+# 安装依赖
 pnpm install
 
-# 若 prisma 引擎下载被墙：
+# 若 Prisma 引擎下载失败（国内网络）：
 #   $env:PRISMA_ENGINES_MIRROR="https://registry.npmmirror.com/-/binary/prisma"
 
+# 配置环境变量
 cp .env.example .env
-pnpm db:push          # 建表
-pnpm db:seed          # 种入 3 个角色用户 + 1 场待处理会议 + 1 场历史会议
-pnpm dev              # http://localhost:3000
+
+# 初始化数据库
+pnpm db:push      # 建表
+pnpm db:seed      # 写入演示数据
+
+# 启动
+pnpm start        # http://127.0.0.1:3210
 ```
 
-打开首页，右上角点 **张伟（owner）** 登录 → 打开「会议纪要功能上线节奏对齐」→ 点 **生成纪要**。
+### 演示账号
 
-### 环境变量
+密码统一为 `demo1234`：
 
-**必填**
-
-| 变量 | 说明 | 默认 |
+| 邮箱 | 姓名 | 角色 |
 |---|---|---|
-| `DATABASE_URL` | SQLite 路径 | `file:./dev.db` |
-| `MOCK_LLM` | `1` = 不调真实模型，走确定性输出（**演示兜底**） | `1` |
+| `owner@demo.dev` | 张伟（产品） | owner |
+| `member@demo.dev` | 李娜（前端） | member |
+| `viewer@demo.dev` | 王强（后端） | viewer |
 
-**LLM（`MOCK_LLM=0` 时必须）**
+也可以直接点击「注册」创建新账号，无需邀请码。
 
-| 变量 | 说明 |
-|---|---|
-| `LLM_BASE_URL` | 任意 OpenAI 兼容网关 |
-| `LLM_API_KEY` | 网关 Key |
-| `LLM_MODEL` | 模型名 |
-
-**ASR（`ASR_PROVIDER=real` 时必须）**
-
-| 变量 | 说明 | 示例 |
-|---|---|---|
-| `ASR_PROVIDER` | `mock` 用预置转写；`real` 调外部服务 | `real` |
-| `ASR_KIND` | `openai` 或 `funasr` | `openai` |
-| `ASR_BASE_URL` | 上游地址 | `http://127.0.0.1:8080/v1` |
-| `ASR_API_KEY` | 上游 Key（可选） | |
-| `ASR_MODEL` | 模型名 | `whisper-1` |
-| `ASR_FALLBACK_TO_MOCK` | `1` = 失败自动降级预置转写 | `0` |
-
-**声纹（可选，不配则用离线确定性伪向量）**
-
-| 变量 | 说明 |
-|---|---|
-| `VOICEPRINT_BASE_URL` | 声纹服务地址（`POST /embed`） |
-| `VOICEPRINT_THRESHOLD` | 判定同一人的余弦阈值，默认 `0.72` |
-| `VOICEPRINT_DIM` | 向量维度，默认 `192` |
-| `VOICEPRINT_ENABLED` | `0` 可关闭声纹，退回标签映射 |
-
-**语义检索（可选，不配则用 bigram 哈希兜底）**
-
-| 变量 | 说明 |
-|---|---|
-| `EMBEDDING_PROVIDER` | `http` 使用外部 embedding 服务 |
-| `EMBEDDING_BASE_URL` | OpenAI 兼容 `/embeddings` 地址 |
-| `EMBEDDING_MODEL` | 模型名 |
-| `SEMANTIC_SEARCH` | `0` 关闭语义，退回纯关键词 |
-
-> **演示建议**：现场保持 `MOCK_LLM=1` + `ASR_PROVIDER=mock`，完全离线。
-> 真实模型输出不稳定，结构化校验连续失败 3 次会进 `FAILED`，对现场是风险。
+> **注意**：实时录音功能需要浏览器授权麦克风，且必须通过 `localhost` / `127.0.0.1` 访问（浏览器的安全限制）。
 
 ---
 
-## 验证
+## 功能演示路径
+
+### 路径一：上传音频生成纪要
+
+1. 用 `owner@demo.dev` 登录
+2. 首页点「新建会议」，填写标题，选择一个会议类型
+3. 上传一段会议音频（或使用演示数据）
+4. 进入会议详情，点「生成纪要」
+5. 观察运行视图中的阶段推进
+6. 查看生成的决议 / 待办 / 风险
+7. 点击任意条目的「引用」，验证能跳回原话
+
+### 路径二：实时会议
+
+1. 打开任意会议，点右上角「实时模式」
+2. 点「开始实时会议」，允许麦克风权限
+3. 对着麦克风说话，观察实时转写
+4. 点「结束并生成纪要」
+
+---
+
+## 配置说明
+
+项目支持**完全离线运行**，不配置任何外部服务也能演示全部流程（使用预置数据与本地模型）。
+
+要接入真实能力，按下表配置 `.env`：
+
+### 大模型（生成纪要）
+
+| 变量 | 说明 |
+|---|---|
+| `MOCK_LLM` | `1` = 使用本地模拟（离线可用）；`0` = 调用真实模型 |
+| `LLM_BASE_URL` | OpenAI 兼容接口地址 |
+| `LLM_API_KEY` | 接口密钥 |
+| `LLM_MODEL` | 模型名称 |
+
+已验证可用的服务：DeepSeek、通义千问、Kimi、任何 OpenAI 兼容网关。
+
+### 语音识别（转写）
+
+| 变量 | 说明 |
+|---|---|
+| `ASR_PROVIDER` | `mock`（预置数据） / `qwen`（推荐） / `dashscope` / `real` |
+| `DASHSCOPE_API_KEY` | 阿里云百炼密钥 |
+| `DASHSCOPE_DIARIZE_MODEL` | 说话人分离模型，默认 `qwen-audio-3.1-asr-flash` |
+| `DASHSCOPE_DIARIZE` | `0` 可关闭说话人分离 |
+
+**推荐配置**：`ASR_PROVIDER=qwen`，支持原生说话人分离，无需注册声纹。
+
+### 其他可选配置
+
+| 变量 | 说明 |
+|---|---|
+| `VOICEPRINT_BASE_URL` | 声纹识别服务地址（不配则不启用） |
+| `EMBEDDING_BASE_URL` | 语义检索服务地址（不配则用本地哈希） |
+| `STORAGE_DIR` | 音频文件存储目录，默认 `./storage` |
+
+### 配置自检
+
+填好配置后，可以访问以下接口验证是否生效：
+
+```
+GET /api/diag/llm    # 检查大模型连通性
+GET /api/diag/asr    # 检查语音识别配置
+```
+
+返回 `ok: true` 表示配置正确。
+
+---
+
+## 技术架构
+
+### 核心设计
+
+**1. 状态机控边界，模型控路径**
+
+整个处理流程分为五个固定阶段：
+
+```
+准备 → 压缩 → 抽取 → 复核 → 完成
+```
+
+阶段边界由代码强制控制（模型不能跳步），但每个阶段内部**调用哪些工具由模型自主决定**。
+
+这样既有确定性（不会漏掉关键步骤），又保留了灵活性（模型可以按需检索、校验）。
+
+**2. 唯一写入路径**
+
+所有纪要数据只能通过一个函数写入数据库，且强制要求携带来源话轮的 ID。
+
+这样保证了「每条结论都能回溯」不是口号，而是数据结构上的硬约束。
+
+**3. 原始数据永不修改**
+
+转写文字永久保留，摘要和纪要是从原文派生出来的。即使摘要生成有误，原始记录永远可查、可重新生成。
+
+**4. 宁可标未知，也不硬猜**
+
+- 说话人认不出来 → 标记「未知参会者」，而不是随便认领一个
+- 检索不到相关内容 → 明确回答「没找到」，而不是编造
+- 真实服务不可用 → 显示降级提示，而不是静默替换
+
+会议纪要的价值在于可信，不在覆盖率。
+
+### 技术栈
+
+| 层 | 技术 |
+|---|---|
+| 前端 | Next.js 15（App Router）+ React 19 + TypeScript + Tailwind CSS |
+| 后端 | Next.js Route Handlers + 自定义 Node server（WebSocket） |
+| Agent | `@earendil-works/pi-agent-core` |
+| 数据库 | SQLite + Prisma ORM |
+| 语音识别 | 阿里云百炼 Qwen-Audio-ASR / DashScope WebSocket |
+| 大模型 | 任意 OpenAI 兼容接口 |
+
+### 目录结构
+
+```
+app/                 页面与 API 路由
+  (app)/             登录后页面（会议列表、详情、追问、声纹）
+  api/               接口端点
+components/          React 组件
+  ui/                基础 UI 组件
+  live/              实时会议相关
+lib/
+  agent/             Agent 编排与状态机
+  asr/               语音识别（离线 / 实时 / 说话人分离）
+  skills/            会议类型（抽取规则配置）
+  auth/              认证与权限
+  voice/             声纹与说话人聚类
+  rag/               检索与向量
+  tools/             Agent 可调用的工具
+  db/                数据库客户端与租户隔离
+prisma/              数据模型与种子数据
+scripts/             测试与工具脚本
+server.mjs           自定义服务（支持 WebSocket）
+```
+
+### 数据模型
+
+共 20 张表，主要分为：
+
+- **租户与用户**：`Tenant` `User` `Session`
+- **会议与转写**：`Meeting` `MeetingParticipant` `TranscriptTurn`
+- **纪要**：`Minutes` `Decision` `ActionItem` `Risk` `Summary` `Citation`
+- **实时会议**：`LiveSession` `LiveChunk` `LiveSegment` `LiveMinuteItem`
+- **记忆与检索**：`Memory` `Embedding`
+- **声纹**：`Voiceprint`
+- **审计**：`AuditLog`
+
+---
+
+## 测试
+
+项目包含 9 个测试套件，覆盖从单元逻辑到端到端流程：
 
 ```bash
-pnpm test:all          # 142 项断言，一次跑全部
-pnpm smoke             # 纯后端链路冒烟（不启动 UI）
-pnpm e2e               # 主链路端到端（需先 build + start -p 3210）
-pnpm fake:asr          # 起一个本地假 ASR 服务，无外部依赖验证真实 ASR 链路
+# 全部测试
+pnpm test:all
+
+# 分类运行
+pnpm test:asr          # 语音识别适配器
+pnpm test:voice        # 声纹聚类
+pnpm test:rag          # 检索与召回
+pnpm test:live         # 实时分片处理
+pnpm test:llm          # 模型输出解析
+pnpm test:asr-cloud    # 云识别协议
+
+pnpm e2e               # 主流程端到端
+pnpm e2e:live          # 实时会议流程
+pnpm e2e:diarization   # 说话人分离
+pnpm e2e:skills        # 不同会议类型的产出差异
+pnpm e2e:realtime      # WebSocket 实时链路
 ```
 
-| 套件 | 断言 | 覆盖 |
-|---|---|---|
-| `pnpm e2e` | 20 | 登录/RBAC/上传/状态机/SSE/纪要/追问/防编造 |
-| `pnpm test:asr` | 13 | 两种 ASR 上游格式、时间换算、错误、降级 |
-| `pnpm test:voice` | 18 | 聚类、身份认领、标签合并、边界 |
-| `pnpm test:rag` | 16 | 分词、召回、RRF、租户隔离、幂等、防幻觉 |
-| `pnpm test:live` | 23 | 跨片拼接、增量去重、规则抽取 |
-| `pnpm e2e:live` | 24 | 分片上传 → 实时 SSE → 增量纪要 → 结束合并 |
-| `pnpm e2e:asr` | 8 | 上传音频 → 真实 ASR → 入库 → 纪要 |
-| `pnpm e2e:voice` | 20 | 注册声纹 → 会议聚类 → 删除 |
-
-| 组 | 断言 |
-|---|---|
-| 登录与 RBAC | owner 登录、viewer 创建会议被拒(403)、viewer 触发 Agent 被拒(403)、viewer 编辑纪要被拒(403) |
-| Agent 编排 | SSE 建立、5 个阶段顺序正确、6 类工具调用事件、收到 done |
-| 纪要质量 | 页面渲染、决议/待办/风险分区、引用按钮、转写气泡 |
-| 记忆追问 | 追问可用、命中历史并带引用、无命中时不编造 |
+> 运行端到端测试前需要先 `pnpm build` 并启动服务。
 
 ---
 
-## 演示脚本（9 步）
+## 已知限制
 
-| 步骤 | 操作 | 对应设计 |
+如实列出当前实现的不足之处：
+
+| 限制 | 说明 | 影响 |
 |---|---|---|
-| 1 | owner 登录 | RBAC 第 1 层 |
-| 2 | 新建会议（可传音频，也可不传） | 上传与异步任务 |
-| 3 | 打开会议详情 | 转写气泡按人分色 |
-| 4 | 点「生成纪要」 | 状态机 + SSE 实时可见 |
-| 5 | 观察运行视图 | 阶段推进 + 工具调用 + 摘要流 |
-| 6 | 看纪要页 | 概述 / 决议 / 待办 / 风险 |
-| 7 | 点 `#引用` | 跳回原话并高亮（反幻觉的可见证据） |
-| 8 | 编辑待办负责人 | 字段级编辑 + 审计日志 |
-| 9 | 切 viewer 再试 | 被拒；跨会议追问带引用 |
+| **长音频不支持** | 同步识别接口限制单次 5 分钟 | 超过 5 分钟的音频需改用实时模式 |
+| **说话人只有编号** | 能分出「有几个人」，但不知道「这是谁」 | 需要人工标注姓名 |
+| **语义检索是本地兜底** | 未配置 embedding 服务时使用字符哈希 | 「换个说法」的查询召回率有限 |
+| **无密码找回** | 只有登录和注册 | 忘记密码需管理员重置 |
+| **无登录限流** | 未限制失败次数 | 生产环境需补充 |
+| **实时延迟 1~2 秒** | 受网络与识别服务往返影响 | 非字级实时 |
 
 ---
 
-## 代码结构与 issue 对应
+## 开发说明
 
-| 目录 / 文件 | 对应 issue | 说明 |
-|---|---|---|
-| `prisma/schema.prisma` | #3 | 权威数据源，15 张表（含声纹库与向量索引） |
-| `prisma/seed.ts` | #3 | 1 租户 / 3 角色 / 2 场会议 |
-| `lib/auth/rbac.ts` | #4 | 第 1 层：角色能力矩阵 + 工具白名单（硬编码） |
-| `lib/auth/session.ts` `guard.ts` | #4 | 第 0/1 层：身份与统一守卫 |
-| `lib/db/scoped.ts` | #4 | 第 3 层：强制 `tenant_id` 过滤 |
-| `lib/agent/runtime.ts` | #6 | pi-agent-core `Agent` + 工具注册 + `beforeToolCall` 闸门 |
-| `lib/llm.ts` | #6 | 自定义 OpenAI 兼容 provider（换网关只改 env） |
-| `lib/asr/index.ts` | #5 #7 #8 | 上传链路、话轮合并、统一入口与降级 |
-| `lib/asr/real.ts` | **#22** | 真实 ASR：OpenAI / FunASR 两种上游适配器 |
-| `lib/voice/cluster.ts` | **#23** | 声纹聚类：余弦 + 阈值，不预设簇数 |
-| `lib/voice/embedder.ts` | **#23** | 声纹提取（HTTP 服务 + 离线确定性兜底） |
-| `lib/rag/embedding.ts` | **#25** | 文本向量化（HTTP embedding + bigram 哈希兜底） |
-| `lib/rag/retriever.ts` | **#25** | RRF 混合召回 + 相关性闸门 |
-| `lib/agent/pipeline.ts` | #9 #12 #13 #15 | 六态状态机、摘要、结构化抽取、记忆沉淀、建索引 |
-| `lib/tools/index.ts` | #7 #13 #16 #25 | 工具实现；`save_minutes` 是**唯一写库路径** |
-| `lib/context/governance.ts` | #12 | `transformContext` / `convertToLlm` |
-| `lib/memory/store.ts` | #15 | `MemoryStore` 接口（可替换 mem0） |
-| `lib/events.ts` | #11 | 事件总线，支持重连回放 |
-| `app/api/meetings/[id]/stream` | #11 | SSE |
-| `app/api/voiceprints` | **#23** | 声纹注册 / 列表 / 删除 |
-| `components/*` | #10 #14 | 转写气泡、纪要视图、运行视图、声纹面板 |
-| `app/api/ask` | #16 | 跨会议单轮追问 |
+### 为什么需要自定义 server
+
+Next.js 的 Route Handler 不支持 WebSocket 升级，而实时转写需要全双工通信。
+
+因此 `server.mjs` 在 Node HTTP server 上挂载了 WebSocketServer，与 Next 共用同一端口。
+
+**启动时请使用 `pnpm start`**（内部调用 `node server.mjs`），不要直接用 `next start`，否则实时功能不可用。
+
+### 添加新的会议类型
+
+在 `lib/skills/` 下新建一个文件，导出 Skill 配置：
+
+```ts
+export const mySkill: Skill = {
+  id: "my-skill",
+  name: "自定义会议类型",
+  description: "适用场景说明",
+  focus: ["要抽取什么", "关注什么"],
+  constraints: ["硬性约束"],
+  overviewGuide: "概述怎么写",
+  examples: [/* 少样本示例 */],
+};
+```
+
+然后在 `lib/skills/registry.ts` 中注册即可。
 
 ---
 
-## 实现里做对的几个点（二面可讲）
+## 许可证
 
-1. **模型不能直接写库**：全局只有 `saveMinutes()` 一处写纪要表，且强制带 `source_turn_id`，
-   写入前过 Schema 校验；校验失败最多修 3 次，仍失败则进 `FAILED` 并保留中间产物。
-2. **摘要只是索引**：原始话轮永久保留，摘要带 `turnRefs`，前端点引用可回跳原话。
-3. **三层权限都能演示**：路由 403 → 工具闸门 → 查询强制 `tenant_id`。
-4. **断线可恢复**：SSE 重连时事件总线回放历史事件。
-5. **演示不依赖外网**：`MOCK_LLM=1` + `ASR_PROVIDER=mock` + 声纹/检索离线兜底，全离线。
-6. **宁可标未知，也不硬猜**：说话人认不出时标「未知参会者 + 待复核」，
-   检索无相关时不召回。会议纪要的价值在可信，不在覆盖率。
-7. **降级必须可见**：真实 ASR 失败降级到预置转写时，事件流里发一条告警，不静默替换。
-
-## 踩过的坑（写进 README 免得后面再踩）
-
-- **`@mariozechner/pi-agent-core` 已废弃**，必须用 `@earendil-works/pi-agent-core@1.5.2`。
-- **pi-ai 只导出 `import` 条件**（ESM-only），在 tsx/CJS 脚本里静态 `import` 会报
-  `ERR_PACKAGE_PATH_NOT_EXPORTED`；本项目统一改成运行时动态 `import()`。
-- **provider 工厂不接受 baseUrl 参数**：换网关要用 `createProvider({ baseUrl, models })` +
-  自定义 model 条目。
-- **SSE 心跳必须处理客户端断开**，否则 `controller.enqueue` 抛 `ERR_INVALID_STATE` 直接让进程崩溃。
-- **话轮合并会把整场会议压成一条**：whisper 无说话人信息时全是 `speaker_0`，
-  必须只合并「短句碎片」，完整句保持独立。
-- **向量相似度无法区分相关/无关**：实测「今天天气」0.178 vs「存储怎么处理」0.200，
-  任何单一阈值都会错判；必须结合关键词是否命中做闸门。
-- **`centroid([...JSON.parse(emb), new])` 是错的**：`JSON.parse` 返回一个向量，
-  展开成一堆数字而非「向量数组」，正确写法是 `centroid([prev, new])` 并校验维度。
-- **Prisma 引擎下载**在国内网络需要设 `PRISMA_ENGINES_MIRROR`。
-
-## 已知缺陷
-
-1. **实时是「准实时」不是「字级实时」**：分片 4 秒 + ASR 往返，实际延迟约 4~8 秒；真正的低延迟需要 WebSocket 音频流（架构已预留，见 `lib/live/` 的 session 抽象）
-2. **声纹依赖外部服务**：不配 `VOICEPRINT_BASE_URL` 时用确定性伪向量，
-   它能验证链路但**不是真声纹**，换了设备/录音就失效
-3. **语义检索用了兜底向量**：不配 `EMBEDDING_BASE_URL` 时是 bigram 哈希，
-   对「换一种说法」的召回能力有限；配了真实 embedding 才有真正的语义能力
-4. **相关性闸门偏保守**：无关键词命中时宁可不召回，牺牲了部分召回率换可信度
-5. **记忆是轻量实现**，非 mem0（backlog #24）
-6. **权限只到租户 + 角色**：无字段级脱敏、无会议级可见性（#29）
-7. **索引为全量加载**：几万条以内无感，量上来需要换 pgvector（backlog #25 的后续）
-
-## 下一步
-
-- WebSocket 音频流（把当前的 4 秒分片降到亚秒级延迟）
-- 接入真实声纹服务（ECAPA-TDNN）与真实 embedding 服务
-- pgvector 替换内存余弦
-- 待办同步飞书 / GitHub Issue
-- 用 10 场真实会议做评估集回归
+MIT

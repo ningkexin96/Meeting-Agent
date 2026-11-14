@@ -1,12 +1,12 @@
 # Issue → 代码 → 测试 追溯表
 
-面试官问「你的流程是不是真跑的」时，这张表就是答案：每个 issue 都能指到具体文件、具体分支、具体测试用例。
+这张表展示需求到实现的完整追溯：每个 issue 都能指到具体文件、具体分支、具体测试用例。
 
 ## 一、主线 17 个 P0 issue 的落地情况
 
 | # | Issue | 状态 | 主要代码 | 验证方式 |
 |---|---|---|---|---|
-| 1 | 定义 MVP 范围合同 | ✅ | `docs/02-mvp-scope.md` | 文档 |
+| 1 | 定义项目范围 | ✅ | `docs/02-mvp-scope.md` | 文档 |
 | 2 | 项目脚手架 | ✅ | `package.json` `tsconfig.json` `next.config.mjs` | `pnpm build` |
 | 3 | 数据模型与 seed | ✅ | `prisma/schema.prisma`（14 表）`prisma/seed.ts` | `pnpm db:seed` |
 | 4 | 三层权限骨架 | ✅ | `lib/auth/rbac.ts` `session.ts` `guard.ts` `lib/db/scoped.ts` | e2e 组 2/4/9 |
@@ -74,7 +74,7 @@ PR 正文模板见 `docs/PR-TEMPLATE.md`。
 
 ## 五、为什么这份追溯表本身就是评估点
 
-面试官问「你有没有真正按 issue 驱动开发」，回答「我有 17 个 issue」是不够的——
+衡量是否真正做到 issue 驱动开发，只列举 issue 数量是不够的——
 关键在于**能不能从任意一行代码反查到它的 issue 和验收标准**。
 
 这张表就是做这件事的。它也解释了为什么三个 backlog 能在一个下午内被实现：

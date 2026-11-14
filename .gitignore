@@ -10,3 +10,4 @@ storage/*
 .DS_Store
 next-env.d.ts
 *.log
+scripts/pr-bodies.json

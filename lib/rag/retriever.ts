@@ -2,7 +2,7 @@
 //
 // 召回策略：关键词（精确、可解释）+ 向量（语义、模糊）两路各取候选，
 // 用 RRF（Reciprocal Rank Fusion）融合排序——不依赖两路分数量纲，
-// 这是业界最稳的做法之一，也能在二面讲清楚「为什么不用简单加权求和」。
+// 这是业界最稳的做法之一：相比简单加权求和，RRF 对分数尺度不敏感。
 import { prisma } from "@/lib/db/client";
 import { getEmbeddingProvider } from "./embedding";
 import { extractWeightedKeywords } from "@/lib/tools/keywords";
