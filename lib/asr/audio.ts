@@ -136,3 +136,75 @@ export function buildWavHeader(dataLength: number, sampleRate = 16000, channels 
   header.writeUInt32LE(dataLength, 40);
   return header;
 }
+
+/**
+ * 线性插值重采样（16bit 单声道 PCM）。
+ *
+ * 为什么自己写而不用 ffmpeg：
+ * 生产环境不该额外依赖外部二进制；会议音频重采样对音质要求不高，
+ * 线性插值足够，且能保证「用户上传任意采样率的 WAV 都能用」。
+ */
+export function resamplePcm(pcm: Buffer, fromRate: number, toRate: number): Buffer {
+  if (fromRate === toRate) return pcm;
+
+  const inFrames = Math.floor(pcm.length / 2);
+  const outFrames = Math.floor((inFrames * toRate) / fromRate);
+  const out = Buffer.alloc(outFrames * 2);
+  const ratio = fromRate / toRate;
+
+  for (let i = 0; i < outFrames; i++) {
+    const srcPos = i * ratio;
+    const i0 = Math.floor(srcPos);
+    const i1 = Math.min(i0 + 1, inFrames - 1);
+    const frac = srcPos - i0;
+
+    const s0 = pcm.readInt16LE(i0 * 2);
+    const s1 = pcm.readInt16LE(i1 * 2);
+    const v = s0 + (s1 - s0) * frac;
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(v))), i * 2);
+  }
+  return out;
+}
+
+/** 下混多声道为单声道 */
+export function downmixToMono(pcm: Buffer, channels: number): Buffer {
+  if (channels === 1) return pcm;
+  const frames = Math.floor(pcm.length / (2 * channels));
+  const out = Buffer.alloc(frames * 2);
+  for (let i = 0; i < frames; i++) {
+    let sum = 0;
+    for (let c = 0; c < channels; c++) {
+      sum += pcm.readInt16LE((i * channels + c) * 2);
+    }
+    out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sum / channels))), i * 2);
+  }
+  return out;
+}
+
+/**
+ * 把任意 WAV 规整成 DashScope 要求的 16kHz 单声道 16bit。
+ * 会自动下混声道、重采样，而不是直接报错要求用户自己转。
+ */
+export function normalizeToDashScope(buf: Buffer): { pcm: Buffer; durationMs: number; converted: boolean } {
+  const info = parseWavHeader(buf);
+
+  if (info.bitsPerSample !== 16) {
+    throw new AudioFormatError(
+      `仅支持 16bit PCM，当前是 ${info.bitsPerSample}bit。建议用 ffmpeg 转成 16bit。`,
+    );
+  }
+
+  let pcm = extractPcm(buf, info);
+  const needsMono = info.channels !== 1;
+  const needsResample = info.sampleRate !== 16000;
+
+  if (needsMono) pcm = downmixToMono(pcm, info.channels);
+  if (needsResample) pcm = resamplePcm(pcm, info.sampleRate, 16000);
+
+  const frames = Math.floor(pcm.length / 2);
+  return {
+    pcm,
+    durationMs: Math.round((frames / 16000) * 1000),
+    converted: needsMono || needsResample,
+  };
+}

@@ -13,6 +13,7 @@
 // 实时链路复用同一个客户端，只是音频源换成浏览器的流。
 
 import WebSocket from "ws";
+
 import { randomUUID } from "node:crypto";
 import { chunkPcm } from "./audio";
 
@@ -208,10 +209,21 @@ export async function transcribePcm(
 
     ws.on("close", (code, reason) => {
       if (settled) return;
-      // 没收到 task-finished 就断开，视为失败
+
+      // 1000 = Normal Closure。
+      // DashScope 在音频里没有有效语音时会主动正常关闭（不返回 task-finished），
+      // 这不是错误，只是"没识别到内容"。交给调用方判断结果为空即可。
+      if (code === 1000) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(turns);
+        return;
+      }
+
+      // 其他关闭码才算异常
       finish(
         new DashScopeError(
-          `WebSocket 意外关闭（${code}）${reason?.toString() || ""}`.trim(),
+          `WebSocket 异常关闭（${code}）${reason?.toString() || ""}`.trim(),
         ),
       );
     });

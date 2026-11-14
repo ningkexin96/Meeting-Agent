@@ -13,6 +13,7 @@ export async function POST(req: Request) {
 
   const form = await req.formData();
   const title = String(form.get("title") ?? "").trim() || "未命名会议";
+  const skillId = String(form.get("skillId") ?? "").trim() || null;
   const audio = form.get("audio");
 
   let audioPath: string | null = null;
@@ -35,6 +36,7 @@ export async function POST(req: Request) {
       stage: "PREPARING",
       audioPath,
       createdBy: session.userId,
+      skillId,
     },
   });
 

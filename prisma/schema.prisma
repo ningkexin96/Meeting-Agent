@@ -66,6 +66,7 @@ model Meeting {
   stage     String   @default("PREPARING")
   audioPath String?
   createdBy String?
+  skillId   String?   // 关联的 Skill，决定抽取规则
   error     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
