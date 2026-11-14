@@ -1,29 +1,50 @@
-// 纪要视图 —— 对应 issue #14（引用跳转 + 字段级编辑 + unresolved 提示）
 "use client";
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import {
+  CheckCircle2,
+  FileText,
+  Gavel,
+  ListTodo,
+  Pencil,
+  ShieldAlert,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 type Minutes = {
   id: string;
   overview: string;
   status: string;
-  actionItems: { id: string; content: string; owner: string | null; dueAt: string | null; unresolved: boolean; sourceTurnId: string | null }[];
+  actionItems: {
+    id: string;
+    content: string;
+    owner: string | null;
+    dueAt: string | null;
+    unresolved: boolean;
+    sourceTurnId: string | null;
+  }[];
   decisions: { id: string; content: string; sourceTurnId: string | null }[];
   risks: { id: string; content: string; severity: string; sourceTurnId: string | null }[];
 } | null;
 
-type Turn = { id: string; idx: number; text: string; participant: { displayName: string } };
+const SEVERITY: Record<string, { label: string; variant: "error" | "warning" | "neutral" }> = {
+  high: { label: "高", variant: "error" },
+  medium: { label: "中", variant: "warning" },
+  low: { label: "低", variant: "neutral" },
+};
 
 export function MinutesView({
   meetingId,
   minutes,
-  turns,
   canEdit,
 }: {
   meetingId: string;
   minutes: Minutes;
-  turns: Turn[];
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -33,12 +54,20 @@ export function MinutesView({
 
   if (!minutes) {
     return (
-      <div className="card p-5">
-        <h2 className="text-sm font-semibold">会议纪要</h2>
-        <p className="mt-2 text-xs text-slate-500">
-          还没有纪要。触发 Agent 后会在这里生成（对应 issue #13）。
-        </p>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="size-4 text-primary" />
+            会议纪要
+          </CardTitle>
+          <p className="mt-0.5 text-xs text-muted-foreground">Agent 生成后在此展示</p>
+        </CardHeader>
+        <CardContent>
+          <div className="py-10 text-center text-xs text-muted-foreground">
+            还没有纪要。触发 Agent 后会生成结构化结果。
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -46,8 +75,8 @@ export function MinutesView({
     if (!turnId) return;
     const el = document.getElementById(`turn-${turnId}`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    el?.classList.add("ring-2", "ring-blue-500");
-    setTimeout(() => el?.classList.remove("ring-2", "ring-blue-500"), 1600);
+    el?.classList.add("turn-flash");
+    setTimeout(() => el?.classList.remove("turn-flash"), 1700);
   }
 
   async function save(itemId: string) {
@@ -70,122 +99,158 @@ export function MinutesView({
   }
 
   return (
-    <div className="card p-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">会议纪要</h2>
-        <div className="flex items-center gap-2">
-          <span className={`pill ${minutes.status === "confirmed" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-            {minutes.status}
-          </span>
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="size-4 text-primary" />
+            会议纪要
+          </CardTitle>
+          <p className="mt-0.5 text-xs text-muted-foreground">每条结论可点击引用回溯原话</p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Badge variant={minutes.status === "confirmed" ? "success" : "warning"}>
+            {minutes.status === "confirmed" ? "已确认" : "草稿"}
+          </Badge>
           {canEdit && minutes.status !== "confirmed" && (
-            <button className="btn-ghost text-xs" onClick={confirm}>
-              确认纪要
-            </button>
+            <Button variant="outline" size="xs" onClick={confirm}>
+              <CheckCircle2 className="size-3" />
+              确认
+            </Button>
           )}
         </div>
-      </div>
+      </CardHeader>
 
-      <p className="mt-2 rounded-lg bg-slate-50 p-3 text-sm leading-relaxed">{minutes.overview}</p>
+      <CardContent className="space-y-4">
+        <p className="rounded-lg bg-muted/50 p-3 text-[13px] leading-relaxed">{minutes.overview}</p>
 
-      <Section title="决议">
-        {minutes.decisions.map((d) => (
-          <Item key={d.id} onJump={() => jump(d.sourceTurnId)}>
-            {d.content}
-          </Item>
-        ))}
-      </Section>
+        <Section icon={Gavel} title="决议" count={minutes.decisions.length}>
+          {minutes.decisions.map((d) => (
+            <Row key={d.id} onJump={() => jump(d.sourceTurnId)}>
+              {d.content}
+            </Row>
+          ))}
+        </Section>
 
-      <Section title="待办">
-        {minutes.actionItems.map((a) => (
-          <div key={a.id} className="rounded-lg border border-slate-200 p-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="text-sm">{a.content}</div>
-              <button className="mono shrink-0 text-[11px] text-blue-600" onClick={() => jump(a.sourceTurnId)}>
-                #引用
+        <Section icon={ListTodo} title="待办" count={minutes.actionItems.length}>
+          {minutes.actionItems.map((a) => (
+            <div key={a.id} className="group/item relative rounded-lg border border-border p-2 pr-2">
+              <div className="pr-12 text-[13px] leading-relaxed">{a.content}</div>
+              <button
+                onClick={() => jump(a.sourceTurnId)}
+                className="absolute right-2 top-2 rounded px-1 py-0.5 font-mono text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary group-hover/item:opacity-100"
+                title="查看对应的原话"
+              >
+                引用
               </button>
-            </div>
-            <div className="mt-1 flex items-center gap-2 text-[11px]">
-              <span className={`pill ${a.owner ? "bg-slate-100 text-slate-700" : "bg-rose-100 text-rose-700"}`}>
-                {a.owner ?? "未指派"}
-              </span>
-              <span className="pill bg-slate-100 text-slate-600">{a.dueAt ?? "无截止"}</span>
-              {a.unresolved && <span className="pill bg-amber-100 text-amber-700">unresolved</span>}
-              {canEdit && editing !== a.id && (
-                <button
-                  className="ml-auto text-blue-600"
-                  onClick={() => {
-                    setEditing(a.id);
-                    setOwner(a.owner ?? "");
-                    setDue(a.dueAt ?? "");
-                  }}
-                >
-                  编辑
-                </button>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                <Badge variant={a.owner ? "neutral" : "error"} className="h-[18px] px-1.5 text-[10px]">
+                  {a.owner ?? "未指派"}
+                </Badge>
+                <Badge variant="neutral" className="h-[18px] px-1.5 text-[10px]">
+                  {a.dueAt ?? "无截止"}
+                </Badge>
+                {a.unresolved && (
+                  <Badge variant="warning" className="h-[18px] px-1.5 text-[10px]">
+                    待补全
+                  </Badge>
+                )}
+                {canEdit && editing !== a.id && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="ml-auto h-[18px] px-1.5 text-[10px]"
+                    onClick={() => {
+                      setEditing(a.id);
+                      setOwner(a.owner ?? "");
+                      setDue(a.dueAt ?? "");
+                    }}
+                  >
+                    <Pencil className="size-2.5" />
+                    编辑
+                  </Button>
+                )}
+              </div>
+              {editing === a.id && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <Input
+                    className="h-7 w-24 text-xs"
+                    placeholder="负责人"
+                    value={owner}
+                    onChange={(e) => setOwner(e.target.value)}
+                  />
+                  <Input
+                    className="h-7 w-24 text-xs"
+                    placeholder="截止时间"
+                    value={due}
+                    onChange={(e) => setDue(e.target.value)}
+                  />
+                  <Button size="xs" onClick={() => save(a.id)}>
+                    保存
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={() => setEditing(null)}>
+                    取消
+                  </Button>
+                </div>
               )}
             </div>
-            {editing === a.id && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                <input
-                  className="w-28 rounded border border-slate-200 px-2 py-1 text-xs"
-                  placeholder="负责人"
-                  value={owner}
-                  onChange={(e) => setOwner(e.target.value)}
-                />
-                <input
-                  className="w-28 rounded border border-slate-200 px-2 py-1 text-xs"
-                  placeholder="截止时间"
-                  value={due}
-                  onChange={(e) => setDue(e.target.value)}
-                />
-                <button className="btn-primary px-2 py-1 text-xs" onClick={() => save(a.id)}>
-                  保存
-                </button>
-                <button className="btn-ghost px-2 py-1 text-xs" onClick={() => setEditing(null)}>
-                  取消
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </Section>
+          ))}
+        </Section>
 
-      <Section title="风险">
-        {minutes.risks.map((r) => (
-          <Item key={r.id} onJump={() => jump(r.sourceTurnId)}>
-            <span
-              className={`pill mr-1 ${
-                r.severity === "high"
-                  ? "bg-rose-100 text-rose-700"
-                  : r.severity === "low"
-                    ? "bg-slate-100 text-slate-600"
-                    : "bg-amber-100 text-amber-700"
-              }`}
-            >
-              {r.severity}
-            </span>
-            {r.content}
-          </Item>
-        ))}
-      </Section>
-    </div>
+        <Section icon={ShieldAlert} title="风险" count={minutes.risks.length}>
+          {minutes.risks.map((r) => {
+            const sev = SEVERITY[r.severity] ?? SEVERITY.medium;
+            return (
+              <Row key={r.id} onJump={() => jump(r.sourceTurnId)}>
+                <Badge variant={sev.variant} className="mr-1.5 h-[18px] px-1.5 text-[10px]">
+                  {sev.label}
+                </Badge>
+                {r.content}
+              </Row>
+            );
+          })}
+        </Section>
+      </CardContent>
+    </Card>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  icon: Icon,
+  title,
+  count,
+  children,
+}: {
+  icon: typeof Gavel;
+  title: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  if (count === 0) return null;
   return (
-    <div className="mt-4">
-      <div className="mb-1.5 text-xs font-medium text-slate-500">{title}</div>
+    <div>
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <Icon className="size-3.5 text-muted-foreground" />
+        <span className="text-xs font-medium text-foreground">{title}</span>
+        <Badge variant="neutral" className="h-4 px-1 text-[10px]">
+          {count}
+        </Badge>
+      </div>
       <div className="space-y-1.5">{children}</div>
     </div>
   );
 }
 
-function Item({ children, onJump }: { children: React.ReactNode; onJump: () => void }) {
+function Row({ children, onJump }: { children: React.ReactNode; onJump: () => void }) {
   return (
-    <div className="flex items-start justify-between gap-2 rounded-lg border border-slate-200 p-2">
-      <div className="text-sm">{children}</div>
-      <button className="mono shrink-0 text-[11px] text-blue-600" onClick={onJump}>
-        #引用
+    <div className="group/row relative rounded-lg border border-border p-2 pr-12 transition-colors hover:border-primary/30">
+      <div className="text-[13px] leading-relaxed">{children}</div>
+      <button
+        onClick={onJump}
+        className="absolute right-2 top-2 rounded px-1 py-0.5 font-mono text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary group-hover/row:opacity-100"
+        title="查看对应的原话"
+      >
+        引用
       </button>
     </div>
   );

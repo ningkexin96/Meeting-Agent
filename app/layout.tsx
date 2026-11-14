@@ -1,42 +1,29 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { getSession } from "@/lib/auth/session";
-import Link from "next/link";
-import { LoginBar } from "@/components/login-bar";
+import { Sidebar } from "@/components/layout/sidebar";
+import { TopBar } from "@/components/layout/top-bar";
 
 export const metadata: Metadata = {
   title: "Meeting Agent · 智能会议纪要",
-  description: "48 小时 MVP：上传音频 → 转写 → Agent 编排 → 结构化纪要",
+  description: "上传音频或会中录音 → 实时转写 → 结构化纪要，每条结论可回溯到原话",
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
+
   return (
     <html lang="zh-CN">
       <body>
-        <header className="border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
-            <div className="flex items-center gap-3">
-              <Link href="/" className="text-base font-semibold">
-                Meeting Agent
-              </Link>
-              <span className="pill bg-slate-100 text-slate-600">48h MVP</span>
-            </div>
-            <nav className="flex items-center gap-4 text-sm text-slate-600">
-              <Link href="/" className="hover:text-blue-600">
-                会议列表
-              </Link>
-              <Link href="/ask" className="hover:text-blue-600">
-                跨会议追问
-              </Link>
-              <Link href="/voiceprints" className="hover:text-blue-600">
-                说话人识别
-              </Link>
-              <LoginBar session={session} />
-            </nav>
+        <div className="flex h-screen overflow-hidden">
+          <Sidebar session={session} />
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <TopBar session={session} />
+            <main className="flex-1 overflow-y-auto overscroll-y-none">
+              <div className="mx-auto w-full max-w-6xl p-4 lg:p-8">{children}</div>
+            </main>
           </div>
-        </header>
-        <main className="mx-auto max-w-6xl px-6 py-6">{children}</main>
+        </div>
       </body>
     </html>
   );

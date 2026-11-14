@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db/client";
 import { runBus, type AgentStage } from "@/lib/events";
 import { mapParticipants, mergeTurns, transcribeWithFallback } from "@/lib/asr";
 import { isMockLlm } from "@/lib/llm";
+import { callModel, extractJson } from "@/lib/agent/llm-call";
 import { mockExtract, mockSummarize } from "@/lib/mock-llm";
 import {
   assertMeetingInTenant,
@@ -52,6 +53,21 @@ export async function runPipeline(ctx: ToolContext) {
 
     let turnCount = await prisma.transcriptTurn.count({ where: { meetingId: ctx.meetingId } });
     if (turnCount === 0) {
+      // 前置校验：真实 ASR 下没有音频就没法转写，直接给出可理解的错误，
+      // 而不是让上游抛一个难懂的异常。mock 模式除外（它本来就不读音频）。
+      const provider = process.env.ASR_PROVIDER ?? "mock";
+      if (provider !== "mock" && !meeting.audioPath) {
+        const liveCount = await prisma.liveSegment.count({
+          where: { meetingId: ctx.meetingId },
+        });
+        if (liveCount === 0) {
+          throw new Error(
+            "这场会议没有音频，也没有实时转写记录，无法生成纪要。" +
+              "请先上传音频，或改用「实时模式」边开会边记录。",
+          );
+        }
+      }
+
       emitTool("run_transcription", {
         asr: process.env.ASR_PROVIDER ?? "mock",
         kind: process.env.ASR_KIND ?? "-",
@@ -147,7 +163,7 @@ export async function runPipeline(ctx: ToolContext) {
       });
     } else {
       // 真实模型路径：按 20 turn 分块压缩（防止上下文撑爆）
-      const text = await callRealLlm(buildSummarizePrompt(turns));
+      const text = await callModel(buildSummarizePrompt(turns), "summarize");
       runBus.publish(ctx.meetingId, { type: "text", text, at: Date.now() });
       await prisma.summary.create({
         data: {
@@ -168,13 +184,21 @@ export async function runPipeline(ctx: ToolContext) {
       try {
         const raw = isMockLlm()
           ? mockExtract(turns.map((t) => ({ idx: t.idx, id: t.id, text: t.text, speaker: t.participant.displayName })))
-          : JSON.parse(await callRealLlm(buildExtractPrompt(turns)));
+          : extractJson(await callModel(buildExtractPrompt(turns), "extract"));
         draft = validateDraft(raw);
         emitTool("validate_schema", { attempt, ok: true });
         break;
       } catch (e) {
         lastErr = (e as Error).message;
         emitTool("validate_schema", { attempt, ok: false, error: lastErr }, false);
+        // 真实模式下把失败原因也推给前端，便于现场排查
+        if (!isMockLlm()) {
+          runBus.publish(ctx.meetingId, {
+            type: "text",
+            text: `⚠️ 第 ${attempt} 次抽取校验失败，正在重试：${lastErr}`,
+            at: Date.now(),
+          });
+        }
       }
     }
     if (!draft) throw new Error(`结构化输出连续 ${MAX_REPAIR} 次校验失败：${lastErr}`);
@@ -335,9 +359,4 @@ function buildExtractPrompt(turns: { idx: number; participant: { displayName: st
 owner 与 dueAt 不知道就留空字符串，不要编。sourceTurnIdx 必须来自下面的 #编号。
 
 ${body}`;
-}
-
-async function callRealLlm(prompt: string): Promise<string> {
-  const { completeText } = await import("@/lib/llm");
-  return completeText(prompt);
 }
