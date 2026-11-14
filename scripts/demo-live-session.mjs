@@ -1,4 +1,4 @@
-// 造一个「进行中」的实时会话演示数据，用于截图与二面展示
+// 构造一个「进行中」的实时会话演示数据，用于截图
 // 用法：node scripts/demo-live-session.mjs
 import { PrismaClient } from "@prisma/client";
 

@@ -1,7 +1,7 @@
 ---
 title: "[ingest] 接入真实 ASR（OpenAI / FunASR 两种上游）"
 labels: P0, layer:ingest
-milestone: MVP / 48h
+milestone: v1.0
 ---
 
 ## 背景

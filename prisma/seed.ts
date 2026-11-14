@@ -23,7 +23,7 @@ async function main() {
 
   const tenant = await prisma.tenant.create({ data: { name: "演示团队" } });
 
-  // 演示账号统一密码：demo1234（写在 README，方便面试演示）
+  // 演示账号统一密码：demo1234（见 README 的演示账号一节）
   const { hashPassword } = await import("../lib/auth/credentials");
   const demoHash = await hashPassword("demo1234");
 
