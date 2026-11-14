@@ -8,6 +8,8 @@
 //
 // 规模只有十几人，暴力比对足够，不引入向量库（那是 backlog #25 的事）。
 
+import { voiceprintSimilarity } from "./similarity";
+
 export type Vec = number[];
 
 export type ClusteredSpeaker = {
@@ -20,6 +22,8 @@ export type ClusteredSpeaker = {
   /** 该聚类包含 ASR 原始标签，用于回填话轮 */
   asrLabels: string[];
   segmentCount: number;
+  /** 未能认领身份时的具体原因，用于前端提示 */
+  unclaimedReason?: string;
 };
 
 export type SegmentForClustering = {
@@ -112,7 +116,7 @@ export function clusterSpeakers(
   const merged: { asrLabels: string[]; vecs: Vec[]; count: number }[] = [];
   for (const [label, vecs] of byLabel) {
     const c = centroid(vecs);
-    const hit = merged.find((m) => cosine(centroid(m.vecs), c) >= threshold);
+    const hit = merged.find((m) => voiceprintSimilarity(centroid(m.vecs), c) >= threshold);
     if (hit) {
       hit.asrLabels.push(label);
       hit.vecs.push(...vecs);
@@ -123,12 +127,30 @@ export function clusterSpeakers(
   }
 
   // 3. 认领身份
+  //
+  // 前置检查：如果库里的声纹彼此之间就区分不开（相似度超过 intragallery 上限），
+  // 说明这个声纹引擎没有区分能力，此时任何「认领」都是误导。
+  // 实测离线伪声纹的跨人相似度可达 0.98，这里直接放弃认领，全部标未知。
+  const gallery = options.gallery ?? [];
+  const galleryMax = Number(process.env.VOICEPRINT_GALLERY_MAX_SIM ?? 0.95);
+  let galleryDiscriminative = true;
+  for (let i = 0; i < gallery.length && galleryDiscriminative; i++) {
+    for (let j = i + 1; j < gallery.length; j++) {
+      if (voiceprintSimilarity(gallery[i].embedding, gallery[j].embedding) >= galleryMax) {
+        galleryDiscriminative = false;
+        break;
+      }
+    }
+  }
+
   const speakers: ClusteredSpeaker[] = merged.map((m) => {
     const emb = centroid(m.vecs);
     let best: { userId: string; displayName: string; score: number } | null = null;
-    for (const g of options.gallery ?? []) {
-      const score = cosine(g.embedding, emb);
-      if (!best || score > best.score) best = { userId: g.userId, displayName: g.displayName, score };
+    if (galleryDiscriminative) {
+      for (const g of gallery) {
+        const score = voiceprintSimilarity(g.embedding, emb);
+        if (!best || score > best.score) best = { userId: g.userId, displayName: g.displayName, score };
+      }
     }
 
     if (best && best.score >= threshold) {
@@ -151,6 +173,11 @@ export function clusterSpeakers(
       needsReview: true,
       asrLabels: m.asrLabels,
       segmentCount: m.count,
+      unclaimedReason: galleryDiscriminative
+        ? best
+          ? `最高相似度 ${best.score.toFixed(3)} 低于阈值 ${threshold}`
+          : "声纹库为空"
+        : "声纹库内样本彼此无法区分，引擎不具备身份识别能力",
     };
   });
 
