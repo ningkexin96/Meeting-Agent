@@ -88,8 +88,57 @@ export const dashscopeAsr: AsrAdapter = {
   },
 };
 
+/** qwen：Qwen-Audio-ASR，带原生说话人分离（推荐） */
+export const qwenAsr: AsrAdapter = {
+  name: "qwen",
+  async transcribe(audioPath: string) {
+    const { readFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const { existsSync } = await import("node:fs");
+    const { normalizeToDashScope, buildWavHeader } = await import("./audio");
+    const { transcribeWithDiarization } = await import("./diarization");
+
+    if (!audioPath) throw new AsrError("该会议没有音频文件，无法调用 ASR");
+
+    const storageDir = path.resolve(process.cwd(), process.env.STORAGE_DIR ?? "./storage");
+    const resolved = path.isAbsolute(audioPath)
+      ? audioPath
+      : existsSync(path.join(storageDir, audioPath))
+        ? path.join(storageDir, audioPath)
+        : path.resolve(audioPath);
+
+    if (!existsSync(resolved)) throw new AsrError("音频文件不存在", resolved);
+
+    const buf = await readFile(resolved);
+    const { pcm, durationMs } = normalizeToDashScope(buf);
+
+    // 同步接口限制 5 分钟，超了直接给出明确提示而不是等上游报错
+    const limitMs = Number(process.env.DASHSCOPE_ASR_MAX_MS ?? 300_000);
+    if (durationMs > limitMs) {
+      throw new AsrError(
+        `音频 ${(durationMs / 60000).toFixed(1)} 分钟，超过同步接口 5 分钟上限。` +
+          "请改用实时模式，或配置异步接口（filetrans）。",
+      );
+    }
+
+    // 重新封装成标准 WAV 头，确保采样率与内容一致
+    const wav = Buffer.concat([buildWavHeader(pcm.length, 16000, 1, 16), pcm]);
+    const turns = await transcribeWithDiarization(wav, 16000);
+
+    return turns.map((t) => ({
+      // 关键：用云服务返回的 speaker_id 作为标签，而不是全部 speaker_0
+      speakerLabel: `speaker_${t.speakerId}`,
+      startMs: t.beginMs,
+      endMs: t.endMs,
+      text: t.text,
+      confidence: t.confidence,
+    }));
+  },
+};
+
 export function getAsr(): AsrAdapter {
   const kind = process.env.ASR_PROVIDER ?? "mock";
+  if (kind === "qwen") return qwenAsr;
   if (kind === "dashscope") return dashscopeAsr;
   if (kind === "real") return realAsr;
   return mockAsr;

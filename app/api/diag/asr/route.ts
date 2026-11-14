@@ -24,6 +24,22 @@ export async function GET() {
     });
   }
 
+  if (provider === "qwen") {
+    const hasKey = Boolean(process.env.DASHSCOPE_API_KEY);
+    return NextResponse.json({
+      ok: hasKey,
+      ...base,
+      mode: "Qwen-Audio-ASR（含原生说话人分离）",
+      model: process.env.DASHSCOPE_DIARIZE_MODEL ?? "qwen-audio-3.1-asr-flash",
+      diarization: process.env.DASHSCOPE_DIARIZE !== "0",
+      hasKey,
+      requirements: "单声道音频；同步接口单次 ≤5 分钟、≤2GB",
+      message: hasKey
+        ? "配置完整，说话人分离已开启"
+        : "缺少 DASHSCOPE_API_KEY",
+    });
+  }
+
   if (provider === "dashscope") {
     const hasKey = Boolean(process.env.DASHSCOPE_API_KEY);
     return NextResponse.json({
