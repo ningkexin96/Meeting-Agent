@@ -1,0 +1,237 @@
+// Prisma schema —— 对应 issue #3（[data] 数据模型落库与 seed 样例数据）
+// 权威数据源：模型不得直接写库，一切写入经 lib/tools/save-minutes.ts
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  users       User[]
+  meetings    Meeting[]
+  memories    Memory[]
+  audits      AuditLog[]
+  voiceprints Voiceprint[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  email        String   @unique
+  name         String
+  role         String // owner | member | viewer
+  voiceprintId String?
+  createdAt    DateTime @default(now())
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id])
+  participations MeetingParticipant[]
+  voiceprints  Voiceprint[]
+
+  @@index([tenantId])
+}
+
+// 声纹库 —— 对应 issue #23
+// embedding 存 JSON float[]（维度由 EMBEDDING_DIM 决定，默认 192，对应 ECAPA-TDNN）
+model Voiceprint {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String
+  embedding  String // JSON: number[]
+  dim        Int
+  samples    Int      @default(1) // 同一用户多条声纹时的样本数，取质心
+  source     String   @default("registration")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+}
+
+model Meeting {
+  id        String   @id @default(cuid())
+  tenantId  String
+  title     String
+  status    String   @default("uploaded") // uploaded | transcribing | transcribed | summarizing | extracting | reviewing | done | failed
+  stage     String   @default("PREPARING")
+  audioPath String?
+  createdBy String?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id])
+  participants MeetingParticipant[]
+  turns        TranscriptTurn[]
+  summaries    Summary[]
+  minutes      Minutes?
+  memories     Memory[]
+  audits       AuditLog[]
+
+  @@index([tenantId])
+}
+
+model MeetingParticipant {
+  id           String  @id @default(cuid())
+  meetingId    String
+  userId       String?
+  displayName  String
+  speakerLabel String // ASR 输出 speaker_0 / speaker_1 ...
+  confidence   Float   @default(1)
+
+  meeting Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User?            @relation(fields: [userId], references: [id])
+  turns   TranscriptTurn[]
+
+  @@unique([meetingId, speakerLabel])
+}
+
+// 原始记录：只读，不提供更新接口
+model TranscriptTurn {
+  id            String  @id @default(cuid())
+  meetingId     String
+  participantId String
+  idx           Int
+  startMs       Int
+  endMs         Int
+  text          String
+  asrConfidence Float   @default(1)
+  needsReview   Boolean @default(false)
+
+  meeting     Meeting            @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  participant MeetingParticipant @relation(fields: [participantId], references: [id])
+
+  citations Citation[]
+
+  @@index([meetingId, idx])
+}
+
+model Summary {
+  id        String   @id @default(cuid())
+  meetingId String
+  stage     String // chunk | final
+  idx       Int      @default(0)
+  content   String
+  turnRefs  String // JSON: string[]
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+}
+
+model Minutes {
+  id        String   @id @default(cuid())
+  meetingId String   @unique
+  overview  String   @default("")
+  status    String   @default("draft") // draft | confirmed
+  editedBy  String?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  meeting     Meeting      @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  actionItems ActionItem[]
+  decisions   Decision[]
+  risks       Risk[]
+}
+
+model ActionItem {
+  id           String    @id @default(cuid())
+  minutesId    String
+  content      String
+  owner        String?
+  dueAt        String?
+  unresolved   Boolean   @default(false)
+  sourceTurnId String?
+
+  minutes Minutes @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+}
+
+model Decision {
+  id           String @id @default(cuid())
+  minutesId    String
+  content      String
+  sourceTurnId String?
+
+  minutes Minutes @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+}
+
+model Risk {
+  id           String @id @default(cuid())
+  minutesId    String
+  content      String
+  severity     String @default("medium")
+  sourceTurnId String?
+
+  minutes Minutes @relation(fields: [minutesId], references: [id], onDelete: Cascade)
+}
+
+model Citation {
+  id         String @id @default(cuid())
+  turnId     String
+  targetType String // action_item | decision | risk | summary
+  targetId   String
+
+  turn TranscriptTurn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+
+  @@index([targetType, targetId])
+}
+
+model Memory {
+  id        String   @id @default(cuid())
+  tenantId  String
+  meetingId String?
+  kind      String // fact | preference | recurring_issue
+  content   String
+  importance Float   @default(0.5)
+  createdAt DateTime @default(now())
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id])
+  meeting Meeting? @relation(fields: [meetingId], references: [id])
+
+  @@index([tenantId])
+}
+
+// 语义检索向量 —— 对应 issue #25
+// 存 embedding（JSON float[]），维度由 EMBEDDING_DIM 决定。
+// 十几人团队会议量小，直接在内存里算余弦即可；数据量上去后再换 pgvector / Qdrant。
+model Embedding {
+  id         String   @id @default(cuid())
+  tenantId   String
+  objectType String // turn | summary | memory | decision
+  objectId   String
+  meetingId  String?
+  content    String // 原文，便于命中后直接返回并展示引用
+  embedding  String // JSON: number[]
+  dim        Int
+  createdAt  DateTime @default(now())
+
+  @@unique([tenantId, objectType, objectId])
+  @@index([tenantId])
+  @@index([tenantId, meetingId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  meetingId String?
+  actorId   String?
+  action    String
+  detail    String   @default("{}")
+  at        DateTime @default(now())
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id])
+  meeting Meeting? @relation(fields: [meetingId], references: [id])
+
+  @@index([tenantId])
+}
