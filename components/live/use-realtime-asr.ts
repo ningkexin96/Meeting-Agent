@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export type RealtimeState = "idle" | "connecting" | "recording" | "paused" | "stopped" | "error";
 
 export type RealtimeResultHandlers = {
-  onFinal?: (r: { text: string; beginMs: number; endMs: number }) => void;
+  onFinal?: (r: { text: string; beginMs: number; endMs: number; seq?: number }) => void;
   onInterim?: (text: string) => void;
   /** 后端创建会话后回调，用于拉取增量纪要 */
   onSession?: (sessionId: string) => void;
@@ -46,8 +46,14 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
   const lastFrameAt = useRef(0);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
+  const stopResolverRef = useRef<((ok: boolean) => void) | null>(null);
+  const stopTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cleanup = useCallback(() => {
+    if (stopTimeoutRef.current) {
+      clearTimeout(stopTimeoutRef.current);
+      stopTimeoutRef.current = null;
+    }
     try {
       nodeRef.current?.port.postMessage("stop");
       nodeRef.current?.disconnect();
@@ -111,6 +117,10 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
 
       // 2. AudioContext：显式 16kHz，浏览器负责重采样
       const ctx = new AudioContext({ sampleRate: 16000 });
+      if (ctx.sampleRate !== 16000) {
+        await ctx.close().catch(() => {});
+        throw new Error(`当前浏览器未按 16kHz 采样（实际 ${ctx.sampleRate}Hz），请换用最新版 Chrome/Edge`);
+      }
       ctxRef.current = ctx;
       // 挂到 window 便于排查音频问题（用户自查 / 自动化测试）
       (window as unknown as { __liveAudioCtx?: AudioContext }).__liveAudioCtx = ctx;
@@ -149,6 +159,7 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
           isFinal?: boolean;
           beginMs?: number;
           endMs?: number;
+          seq?: number;
           message?: string;
         };
         try {
@@ -184,6 +195,7 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
               text: msg.text ?? "",
               beginMs: msg.beginMs ?? 0,
               endMs: msg.endMs ?? 0,
+              seq: msg.seq,
             });
           } else {
             setInterim(msg.text ?? "");
@@ -194,6 +206,12 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
           setState("error");
         } else if (msg.type === "stopped") {
           setState("stopped");
+          const resolveStop = stopResolverRef.current;
+          stopResolverRef.current = null;
+          cleanup();
+          if (wsRef.current === ws) wsRef.current = null;
+          ws.close();
+          resolveStop?.(true);
         }
       };
 
@@ -238,20 +256,37 @@ export function useRealtimeAsr({ meetingId, handlers }: { meetingId: string; han
     }
   }, []);
 
-  const stop = useCallback(() => {
-    try {
-      nodeRef.current?.port.postMessage("stop");
-    } catch {
-      /* ignore */
-    }
-    wsRef.current?.send(JSON.stringify({ type: "stop" }));
-    // 给后端 1.5 秒把最后一句吐完，再断开
-    setTimeout(() => {
+  const stop = useCallback((): Promise<boolean> => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       cleanup();
-      wsRef.current?.close();
-      wsRef.current = null;
       setState((s) => (s === "recording" || s === "paused" ? "stopped" : s));
-    }, 1500);
+      return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+      stopResolverRef.current = resolve;
+      try {
+        nodeRef.current?.port.postMessage("stop");
+        ws.send(JSON.stringify({ type: "stop" }));
+      } catch {
+        stopResolverRef.current = null;
+        cleanup();
+        resolve(false);
+        return;
+      }
+
+      // 服务端会先等待上游最终结果和落库完成，再回 stopped；这里只兜底异常断连。
+      stopTimeoutRef.current = setTimeout(() => {
+        const resolveStop = stopResolverRef.current;
+        stopResolverRef.current = null;
+        cleanup();
+        if (wsRef.current === ws) wsRef.current = null;
+        ws.close();
+        setState((s) => (s === "recording" || s === "paused" ? "stopped" : s));
+        resolveStop?.(false);
+      }, 20_000);
+    });
   }, [cleanup]);
 
   return { state, error, interim, pcmSeconds, audioAlive, start, stop, resume };

@@ -99,16 +99,18 @@ export async function callModel(
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort(new LlmError(`模型调用超时（${timeoutMs}ms）`));
+    }, timeoutMs);
+
     try {
       const { completeText } = await import("@/lib/llm");
-      const text = await Promise.race([
-        completeText(prompt),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new LlmError(`模型调用超时（${timeoutMs}ms）`)), timeoutMs),
-        ),
-      ]);
+      // AbortSignal 会传给底层 HTTP 请求；超时不是“停止等待”，而是真正取消请求。
+      const text = await completeText(prompt, { signal: controller.signal, timeoutMs });
 
       if (!text || !text.trim()) throw new LlmError("模型返回了空内容");
+      clearTimeout(timeout);
 
       recordCall({
         purpose,
@@ -119,14 +121,17 @@ export async function callModel(
       });
       return text;
     } catch (e) {
-      lastErr = e;
+      clearTimeout(timeout);
+      lastErr = controller.signal.aborted
+        ? new LlmError(`模型调用超时（${timeoutMs}ms）`)
+        : e;
       recordCall({
         purpose,
         promptChars: prompt.length,
         outputChars: 0,
         durationMs: Date.now() - startedAt,
         ok: false,
-        error: (e as Error).message,
+        error: (lastErr as Error).message,
       });
       // 最后一次失败直接抛出，否则退避重试
       if (attempt < maxRetries) {

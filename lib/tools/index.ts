@@ -57,23 +57,83 @@ export type MinutesDraft = {
   risks: { content: string; severity: "low" | "medium" | "high"; sourceTurnIdx: number }[];
 };
 
-/** 兜底解析：mock 输出天然结构完整；真实模型输出经此校验 */
+type RawObject = Record<string, unknown>;
+
+function asObject(value: unknown, label: string): RawObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`纪要结构非法：${label} 不是对象`);
+  }
+  return value as RawObject;
+}
+
+function requiredText(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`纪要结构非法：${label} 缺少非空 content`);
+  }
+  return value.trim();
+}
+
+function requiredTurnIdx(value: unknown, label: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new Error(`纪要结构非法：${label} 的 sourceTurnIdx 必须是非负整数`);
+  }
+  return value as number;
+}
+
+function optionalText(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") throw new Error(`纪要结构非法：${label} 必须是字符串`);
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+/** 兜底解析：mock 输出天然结构完整；真实模型输出经此完整校验 */
 export function validateDraft(raw: unknown): MinutesDraft {
-  if (!raw || typeof raw !== "object") throw new Error("纪要结构非法：不是对象");
-  const d = raw as Partial<MinutesDraft>;
-  if (typeof d.overview !== "string" || !d.overview.trim()) throw new Error("纪要结构非法：缺少 overview");
+  const d = asObject(raw, "根节点");
+  if (typeof d.overview !== "string" || !d.overview.trim()) {
+    throw new Error("纪要结构非法：缺少 overview");
+  }
   if (!Array.isArray(d.decisions)) throw new Error("纪要结构非法：缺少 decisions");
   if (!Array.isArray(d.actionItems)) throw new Error("纪要结构非法：缺少 actionItems");
   if (!Array.isArray(d.risks)) throw new Error("纪要结构非法：缺少 risks");
-  return {
-    overview: d.overview,
-    decisions: d.decisions,
-    actionItems: d.actionItems,
-    risks: d.risks,
-  };
+
+  const decisions = d.decisions.map((item, i) => {
+    const row = asObject(item, `decisions[${i}]`);
+    return {
+      content: requiredText(row.content, `decisions[${i}]`),
+      sourceTurnIdx: requiredTurnIdx(row.sourceTurnIdx, `decisions[${i}]`),
+    };
+  });
+
+  const actionItems = d.actionItems.map((item, i) => {
+    const row = asObject(item, `actionItems[${i}]`);
+    return {
+      content: requiredText(row.content, `actionItems[${i}]`),
+      owner: optionalText(row.owner, `actionItems[${i}].owner`),
+      dueAt: optionalText(row.dueAt, `actionItems[${i}].dueAt`),
+      sourceTurnIdx: requiredTurnIdx(row.sourceTurnIdx, `actionItems[${i}]`),
+    };
+  });
+
+  const risks = d.risks.map((item, i) => {
+    const row = asObject(item, `risks[${i}]`);
+    const raw = row.severity ?? "medium";
+    // 运行时已校验取值，这里用类型断言把 string 收窄成联合类型
+    if (raw !== "low" && raw !== "medium" && raw !== "high") {
+      throw new Error(`纪要结构非法：risks[${i}].severity 只能是 low/medium/high`);
+    }
+    const severity = raw as "low" | "medium" | "high";
+    return {
+      content: requiredText(row.content, `risks[${i}]`),
+      severity,
+      sourceTurnIdx: requiredTurnIdx(row.sourceTurnIdx, `risks[${i}]`),
+    };
+  });
+
+  return { overview: d.overview.trim(), decisions, actionItems, risks };
 }
 
-/** 唯一写入路径（issue #13） */
+/** 唯一写入路径（issue #13）：先完整校验，再在一个事务里替换旧版本 */
 export async function saveMinutes(ctx: ToolContext, draft: MinutesDraft) {
   const meeting = await assertMeetingInTenant(ctx.tenantId, ctx.meetingId);
   const turns = await prisma.transcriptTurn.findMany({
@@ -82,81 +142,102 @@ export async function saveMinutes(ctx: ToolContext, draft: MinutesDraft) {
   });
   const turnByIdx = new Map(turns.map((t) => [t.idx, t]));
 
-  // 幂等：重复提交覆盖为最新一份
-  const existing = await prisma.minutes.findUnique({ where: { meetingId: ctx.meetingId } });
-  if (existing) {
-    await prisma.citation.deleteMany({ where: { targetId: { in: await minuteChildIds(existing.id) } } });
-    await prisma.actionItem.deleteMany({ where: { minutesId: existing.id } });
-    await prisma.decision.deleteMany({ where: { minutesId: existing.id } });
-    await prisma.risk.deleteMany({ where: { minutesId: existing.id } });
-    await prisma.minutes.delete({ where: { id: existing.id } });
+  // 引用索引必须在删除旧纪要之前校验完；否则失败会留下半份新数据。
+  const allRefs = [
+    ...draft.decisions.map((d) => d.sourceTurnIdx),
+    ...draft.actionItems.map((a) => a.sourceTurnIdx),
+    ...draft.risks.map((r) => r.sourceTurnIdx),
+  ];
+  const invalidRef = allRefs.find((idx) => !turnByIdx.has(idx));
+  if (invalidRef !== undefined) {
+    throw new Error(`纪要结构非法：sourceTurnIdx=${invalidRef} 不存在于当前会议转写中`);
   }
 
-  const minutes = await prisma.minutes.create({
-    data: {
-      meetingId: ctx.meetingId,
-      overview: draft.overview,
-      status: "draft",
-      editedBy: ctx.userId,
-    },
-  });
+  return prisma.$transaction(async (tx) => {
+    // 幂等：重复提交覆盖为最新一份；整个替换过程必须原子化。
+    const existing = await tx.minutes.findUnique({ where: { meetingId: ctx.meetingId } });
+    if (existing) {
+      const [oldActions, oldDecisions, oldRisks] = await Promise.all([
+        tx.actionItem.findMany({ where: { minutesId: existing.id }, select: { id: true } }),
+        tx.decision.findMany({ where: { minutesId: existing.id }, select: { id: true } }),
+        tx.risk.findMany({ where: { minutesId: existing.id }, select: { id: true } }),
+      ]);
+      const childIds = [...oldActions, ...oldDecisions, ...oldRisks].map((x) => x.id);
+      if (childIds.length) {
+        await tx.citation.deleteMany({ where: { targetId: { in: childIds } } });
+      }
+      if (oldDecisions.length) {
+        await tx.embedding.deleteMany({
+          where: {
+            tenantId: ctx.tenantId,
+            objectType: "decision",
+            objectId: { in: oldDecisions.map((d) => d.id) },
+          },
+        });
+      }
+      await tx.actionItem.deleteMany({ where: { minutesId: existing.id } });
+      await tx.decision.deleteMany({ where: { minutesId: existing.id } });
+      await tx.risk.deleteMany({ where: { minutesId: existing.id } });
+      await tx.minutes.delete({ where: { id: existing.id } });
+    }
 
-  const citations: { turnId: string; targetType: string; targetId: string }[] = [];
-
-  for (const d of draft.decisions) {
-    const turn = turnByIdx.get(d.sourceTurnIdx);
-    const row = await prisma.decision.create({
-      data: { minutesId: minutes.id, content: d.content, sourceTurnId: turn?.id },
-    });
-    if (turn) citations.push({ turnId: turn.id, targetType: "decision", targetId: row.id });
-  }
-
-  for (const a of draft.actionItems) {
-    const turn = turnByIdx.get(a.sourceTurnIdx);
-    const unresolved = !a.owner || !a.dueAt;
-    const row = await prisma.actionItem.create({
+    const minutes = await tx.minutes.create({
       data: {
-        minutesId: minutes.id,
-        content: a.content,
-        owner: a.owner ?? null,
-        dueAt: a.dueAt ?? null,
-        unresolved,
-        sourceTurnId: turn?.id,
+        meetingId: ctx.meetingId,
+        overview: draft.overview,
+        status: "draft",
+        editedBy: ctx.userId,
       },
     });
-    if (turn) citations.push({ turnId: turn.id, targetType: "action_item", targetId: row.id });
-  }
 
-  for (const r of draft.risks) {
-    const turn = turnByIdx.get(r.sourceTurnIdx);
-    const row = await prisma.risk.create({
-      data: {
-        minutesId: minutes.id,
-        content: r.content,
-        severity: r.severity ?? "medium",
-        sourceTurnId: turn?.id,
-      },
+    const citations: { turnId: string; targetType: string; targetId: string }[] = [];
+
+    for (const d of draft.decisions) {
+      const turn = turnByIdx.get(d.sourceTurnIdx)!;
+      const row = await tx.decision.create({
+        data: { minutesId: minutes.id, content: d.content, sourceTurnId: turn.id },
+      });
+      citations.push({ turnId: turn.id, targetType: "decision", targetId: row.id });
+    }
+
+    for (const a of draft.actionItems) {
+      const turn = turnByIdx.get(a.sourceTurnIdx)!;
+      const unresolved = !a.owner || !a.dueAt;
+      const row = await tx.actionItem.create({
+        data: {
+          minutesId: minutes.id,
+          content: a.content,
+          owner: a.owner ?? null,
+          dueAt: a.dueAt ?? null,
+          unresolved,
+          sourceTurnId: turn.id,
+        },
+      });
+      citations.push({ turnId: turn.id, targetType: "action_item", targetId: row.id });
+    }
+
+    for (const r of draft.risks) {
+      const turn = turnByIdx.get(r.sourceTurnIdx)!;
+      const row = await tx.risk.create({
+        data: {
+          minutesId: minutes.id,
+          content: r.content,
+          severity: r.severity,
+          sourceTurnId: turn.id,
+        },
+      });
+      citations.push({ turnId: turn.id, targetType: "risk", targetId: row.id });
+    }
+
+    if (citations.length) await tx.citation.createMany({ data: citations });
+
+    await tx.meeting.update({
+      where: { id: meeting.id },
+      data: { status: "done", stage: "DONE" },
     });
-    if (turn) citations.push({ turnId: turn.id, targetType: "risk", targetId: row.id });
-  }
 
-  if (citations.length) await prisma.citation.createMany({ data: citations });
-
-  await prisma.meeting.update({
-    where: { id: meeting.id },
-    data: { status: "done", stage: "DONE" },
-  });
-
-  return { minutesId: minutes.id, citations: citations.length };
-}
-
-async function minuteChildIds(minutesId: string) {
-  const [a, d, r] = await Promise.all([
-    prisma.actionItem.findMany({ where: { minutesId }, select: { id: true } }),
-    prisma.decision.findMany({ where: { minutesId }, select: { id: true } }),
-    prisma.risk.findMany({ where: { minutesId }, select: { id: true } }),
-  ]);
-  return [...a, ...d, ...r].map((x) => x.id);
+    return { minutesId: minutes.id, citations: citations.length };
+  }, { timeout: 15_000 });
 }
 
 /** 增量记忆（issue #15）：mem0 风格 ADD / UPDATE / NOOP */
@@ -268,7 +349,9 @@ export async function recallMemory(ctx: TenantScope, query: string, limit = 5) {
   const keywords = extractKeywords(query);
   if (keywords.length === 0) return [];
 
-  const memories = await prisma.memory.findMany({ where: { tenantId: ctx.tenantId } });
+  const memories = await prisma.memory.findMany({
+    where: { tenantId: ctx.tenantId, status: { in: ["active", "proposed"] } },
+  });
   const hit = memories.filter((m) => keywords.some((k) => m.content.includes(k)));
 
   const decisions = await prisma.decision.findMany({

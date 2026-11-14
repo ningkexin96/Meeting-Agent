@@ -9,13 +9,15 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  if (session.role !== "owner") {
+    return NextResponse.json({ error: "只有 owner 可以运行模型连通性诊断" }, { status: 403 });
+  }
 
   const cfg = {
     mock: isMockLlm(),
     baseUrl: process.env.LLM_BASE_URL ?? "",
     model: process.env.LLM_MODEL ?? "",
     hasKey: Boolean(process.env.LLM_API_KEY && process.env.LLM_API_KEY.length > 8),
-    keyPrefix: process.env.LLM_API_KEY ? `${process.env.LLM_API_KEY.slice(0, 6)}…` : "",
   };
 
   if (cfg.mock) {

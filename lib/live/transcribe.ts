@@ -26,6 +26,9 @@ export type ChunkInput = {
   ext: string;
 };
 
+// MediaRecorder 分片上传天然可能并发；拼接尾部必须按会话串行，不能基于同一快照重写。
+const chunkQueues = new Map<string, Promise<unknown>>();
+
 function storageDir() {
   return path.resolve(process.cwd(), process.env.STORAGE_DIR ?? "./storage");
 }
@@ -76,7 +79,31 @@ export async function processChunk(input: ChunkInput): Promise<{
   error?: string;
   segments: AsrTurn[];
 }> {
-  const chunk = await prisma.liveChunk.create({
+  const previous = chunkQueues.get(input.sessionId) ?? Promise.resolve();
+  const next = previous.then(() => processChunkNow(input));
+  const tracked = next.catch(() => undefined);
+  chunkQueues.set(input.sessionId, tracked);
+  try {
+    return await next;
+  } finally {
+    if (chunkQueues.get(input.sessionId) === tracked) chunkQueues.delete(input.sessionId);
+  }
+}
+
+async function processChunkNow(input: ChunkInput): Promise<{
+  ok: boolean;
+  added: number;
+  error?: string;
+  segments: AsrTurn[];
+}> {
+  const existingChunk = await prisma.liveChunk.findUnique({
+    where: { sessionId_seq: { sessionId: input.sessionId, seq: input.seq } },
+  });
+  if (existingChunk?.status === "transcribed") {
+    return { ok: true, added: 0, segments: [] };
+  }
+
+  const chunk = existingChunk ?? await prisma.liveChunk.create({
     data: {
       sessionId: input.sessionId,
       seq: input.seq,
@@ -104,7 +131,13 @@ export async function processChunk(input: ChunkInput): Promise<{
   }
 
   try {
-    const { turns, usedFallback, error } = await transcribeWithFallback(relPath, { allowFallback: true });
+    const provider = process.env.ASR_PROVIDER ?? "mock";
+    // mock 数据源是整场预置会议；实时分片模式下只在第一片产出，避免每 4 秒重复插入同一套话轮。
+    const { turns, usedFallback, error } = provider === "mock" && input.seq > 0
+      ? { turns: [] as AsrTurn[], usedFallback: false, error: undefined }
+      : await transcribeWithFallback(relPath, {
+          allowFallback: process.env.ASR_FALLBACK_TO_MOCK === "1",
+        });
     if (usedFallback && error) {
       // 真实 ASR 不可用时降级，但必须让前端知道
       const mid = await meetingIdOf(input.sessionId);
@@ -179,9 +212,16 @@ export async function processChunk(input: ChunkInput): Promise<{
     }
 
     await prisma.liveChunk.update({ where: { id: chunk.id }, data: { status: "transcribed" } });
+    const live = await prisma.liveSession.findUnique({
+      where: { id: input.sessionId },
+      select: { chunkSeq: true, cursorMs: true },
+    });
     await prisma.liveSession.update({
       where: { id: input.sessionId },
-      data: { chunkSeq: Math.max(input.seq + 1, chunkSeqOf(input)), cursorMs: input.endMs },
+      data: {
+        chunkSeq: Math.max(input.seq + 1, live?.chunkSeq ?? 0),
+        cursorMs: Math.max(input.endMs, live?.cursorMs ?? 0),
+      },
     });
     runBus.publish(meetingId, { type: "live:chunk", seq: input.seq, status: "transcribed", at: Date.now() });
 
@@ -213,10 +253,6 @@ export async function processChunk(input: ChunkInput): Promise<{
 function chunkOffsetOf(input: ChunkInput): number {
   if (Number.isFinite(input.startMs) && input.startMs >= 0) return input.startMs;
   return input.seq * CHUNK_MS;
-}
-
-function chunkSeqOf(input: ChunkInput): number {
-  return input.seq;
 }
 
 async function meetingIdOf(sessionId: string): Promise<string> {

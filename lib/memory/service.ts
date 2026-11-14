@@ -188,6 +188,15 @@ export async function updateMemory(
 
   if (Object.keys(data).length === 0) return { unchanged: true as const };
 
+  const indexOps = input.status === "deleted"
+    ? [prisma.embedding.deleteMany({ where: { tenantId, objectType: "memory", objectId: id } })]
+    : input.content !== undefined
+      ? [prisma.embedding.updateMany({
+          where: { tenantId, objectType: "memory", objectId: id },
+          data: { content: input.content },
+        })]
+      : [];
+
   const [updated] = await prisma.$transaction([
     prisma.memory.update({ where: { id }, data }),
     prisma.memoryChange.create({
@@ -206,6 +215,7 @@ export async function updateMemory(
         reason: input.reason ?? null,
       },
     }),
+    ...indexOps,
   ]);
 
   return { updated };

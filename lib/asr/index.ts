@@ -123,7 +123,9 @@ export const qwenAsr: AsrAdapter = {
 
     // 重新封装成标准 WAV 头，确保采样率与内容一致
     const wav = Buffer.concat([buildWavHeader(pcm.length, 16000, 1, 16), pcm]);
-    const turns = await transcribeWithDiarization(wav, 16000);
+    const turns = await transcribeWithDiarization(wav, 16000, {
+      withSpeaker: process.env.DASHSCOPE_DIARIZE !== "0",
+    });
 
     return turns.map((t) => ({
       // 关键：用云服务返回的 speaker_id 作为标签，而不是全部 speaker_0
@@ -138,10 +140,11 @@ export const qwenAsr: AsrAdapter = {
 
 export function getAsr(): AsrAdapter {
   const kind = process.env.ASR_PROVIDER ?? "mock";
+  if (kind === "mock") return mockAsr;
   if (kind === "qwen") return qwenAsr;
   if (kind === "dashscope") return dashscopeAsr;
   if (kind === "real") return realAsr;
-  return mockAsr;
+  throw new AsrError(`未知 ASR_PROVIDER：${kind}（可用值：mock / qwen / dashscope / real）`);
 }
 
 /**

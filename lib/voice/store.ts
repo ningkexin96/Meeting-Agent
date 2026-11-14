@@ -1,6 +1,6 @@
 // 声纹库读写 —— 对应 issue #23
 import { prisma } from "@/lib/db/client";
-import { centroid, normalize, type GalleryEntry, type Vec } from "./cluster";
+import { normalize, type GalleryEntry, type Vec } from "./cluster";
 
 export async function getGallery(tenantId: string): Promise<GalleryEntry[]> {
   const rows = await prisma.voiceprint.findMany({
@@ -27,19 +27,23 @@ export async function registerVoiceprint(
     where: { tenantId_userId: { tenantId, userId } },
   });
 
-  // 注意：existing.embedding 是「一个向量」的 JSON，不是向量的数组。
-  // 重复注册时要把「旧质心」和「新向量」当作两个样本求质心。
+  // 注意：existing.embedding 是「历史样本的质心」JSON，不是一个新样本。
+  // 重复注册必须按历史样本数加权，否则第 3 次及以后会把旧样本整体错误压缩成一半权重。
   if (embedding.length === 0) throw new Error("声纹向量为空");
   let nextEmbedding: Vec;
   if (existing) {
-    const prev = JSON.parse(existing.embedding) as Vec;
+    const prev = normalize(JSON.parse(existing.embedding) as Vec);
     if (prev.length !== embedding.length) {
       throw new Error(
         `声纹维度不一致：已有 ${prev.length} 维，新的 ${embedding.length} 维。` +
           `请先删除旧声纹，或确认 VOICEPRINT_DIM 没有变化。`,
       );
     }
-    nextEmbedding = centroid([prev, normalize(embedding)]);
+    const current = normalize(embedding);
+    const oldSamples = Math.max(1, existing.samples);
+    nextEmbedding = normalize(
+      prev.map((value, index) => (value * oldSamples + current[index]) / (oldSamples + 1)),
+    );
   } else {
     nextEmbedding = normalize(embedding);
   }

@@ -32,7 +32,15 @@ type Item = {
   updatedAt: string;
 };
 
-export function VoiceprintPanel({ canEdit }: { canEdit: boolean }) {
+export function VoiceprintPanel({
+  canEdit,
+  currentUserId,
+  canManageOthers,
+}: {
+  canEdit: boolean;
+  currentUserId: string;
+  canManageOthers: boolean;
+}) {
   const [items, setItems] = useState<Item[]>([]);
   const [engine, setEngine] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,7 +78,13 @@ export function VoiceprintPanel({ canEdit }: { canEdit: boolean }) {
   }
 
   async function remove(userId: string) {
-    await fetch(`/api/voiceprints?userId=${userId}`, { method: "DELETE" });
+    setMsg(null);
+    const res = await fetch(`/api/voiceprints?userId=${userId}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setMsg(data.error ?? "删除失败");
+      return;
+    }
     void load();
   }
 
@@ -152,7 +166,7 @@ export function VoiceprintPanel({ canEdit }: { canEdit: boolean }) {
                       暂不生效
                     </Badge>
                   )}
-                  {canEdit && (
+                  {canEdit && (canManageOthers || it.userId === currentUserId) && (
                     <Button
                       variant="ghost"
                       size="icon-sm"

@@ -9,7 +9,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const session = await getSession();
 
   // 未登录：整屏登录页，不带侧边栏
-  if (!session) return <AuthPanel />;
+  if (!session) {
+    // 注册入口的可见性必须和服务端规则一致，否则用户点了才收到 403
+    const registerEnabled =
+      process.env.NODE_ENV !== "production" || process.env.ALLOW_PUBLIC_REGISTER === "1";
+    return <AuthPanel registerEnabled={registerEnabled} />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
