@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node server.mjs",
     "lint": "next lint",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
@@ -26,7 +26,10 @@
     "test:all": "pnpm test:asr && pnpm test:voice && pnpm test:rag && pnpm test:live && pnpm test:llm && pnpm e2e:asr && pnpm e2e:voice && pnpm e2e:live",
     "fake:asr": "node scripts/fake-asr-server.mjs",
     "fake:live-asr": "node scripts/fake-live-asr.mjs",
-    "demo:live": "node scripts/demo-live-session.mjs"
+    "demo:live": "node scripts/demo-live-session.mjs",
+    "start:next": "next start -p 3210",
+    "e2e:realtime": "node scripts/e2e-realtime.mjs",
+    "e2e:skills": "node scripts/e2e-skills.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",

@@ -53,6 +53,21 @@ export async function runPipeline(ctx: ToolContext) {
 
     let turnCount = await prisma.transcriptTurn.count({ where: { meetingId: ctx.meetingId } });
     if (turnCount === 0) {
+      // 前置校验：真实 ASR 下没有音频就没法转写，直接给出可理解的错误，
+      // 而不是让上游抛一个难懂的异常。mock 模式除外（它本来就不读音频）。
+      const provider = process.env.ASR_PROVIDER ?? "mock";
+      if (provider !== "mock" && !meeting.audioPath) {
+        const liveCount = await prisma.liveSegment.count({
+          where: { meetingId: ctx.meetingId },
+        });
+        if (liveCount === 0) {
+          throw new Error(
+            "这场会议没有音频，也没有实时转写记录，无法生成纪要。" +
+              "请先上传音频，或改用「实时模式」边开会边记录。",
+          );
+        }
+      }
+
       emitTool("run_transcription", {
         asr: process.env.ASR_PROVIDER ?? "mock",
         kind: process.env.ASR_KIND ?? "-",
@@ -163,13 +178,21 @@ export async function runPipeline(ctx: ToolContext) {
 
     // ③ EXTRACTING：结构化抽取，Schema 校验 + 最多 3 次修复
     await emitStage("EXTRACTING", "抽取决议 / 待办 / 风险");
+
+    // 加载该会议关联的 Skill（决定抽取重点），没有就用默认
+    const { getSkill, buildSkillPromptPart } = await import("@/lib/skills");
+    await import("@/lib/skills/registry"); // 注册内置 Skill
+    const skill = getSkill(meeting.skillId);
+    const skillPrompt = buildSkillPromptPart(skill);
+    emitTool("load_skill", { skillId: skill.id, name: skill.name });
+
     let draft: MinutesDraft | null = null;
     let lastErr = "";
     for (let attempt = 1; attempt <= MAX_REPAIR; attempt++) {
       try {
         const raw = isMockLlm()
           ? mockExtract(turns.map((t) => ({ idx: t.idx, id: t.id, text: t.text, speaker: t.participant.displayName })))
-          : extractJson(await callModel(buildExtractPrompt(turns), "extract"));
+          : extractJson(await callModel(buildExtractPrompt(turns, skillPrompt), "extract"));
         draft = validateDraft(raw);
         emitTool("validate_schema", { attempt, ok: true });
         break;
@@ -337,11 +360,24 @@ async function resolveSpeakers(args: {
   };
 }
 
-function buildExtractPrompt(turns: { idx: number; participant: { displayName: string }; text: string }[]) {
+/**
+ * 构造抽取 prompt。
+ * 规则部分来自 Skill（可配置），只有「输出格式」和「转写正文」写在这里，
+ * 因为格式是系统契约，换 Skill 不应该换 Schema。
+ */
+function buildExtractPrompt(
+  turns: { idx: number; participant: { displayName: string }; text: string }[],
+  skillPrompt: string,
+) {
   const body = turns.map((t) => `#${t.idx} ${t.participant.displayName}: ${t.text}`).join("\n");
-  return `你是会议纪要抽取器。只输出 JSON，不要解释。格式：
+  return `你是会议纪要抽取器。只输出 JSON，不要解释。
+
+${skillPrompt}
+## 输出格式（必须严格遵守）
 {"overview":"","decisions":[{"content":"","sourceTurnIdx":0}],"actionItems":[{"content":"","owner":"","dueAt":"","sourceTurnIdx":0}],"risks":[{"content":"","severity":"low|medium|high","sourceTurnIdx":0}]}
+
 owner 与 dueAt 不知道就留空字符串，不要编。sourceTurnIdx 必须来自下面的 #编号。
 
+## 会议转写
 ${body}`;
 }

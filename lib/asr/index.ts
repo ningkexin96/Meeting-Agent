@@ -51,7 +51,7 @@ export const dashscopeAsr: AsrAdapter = {
     const { readFile } = await import("node:fs/promises");
     const path = await import("node:path");
     const { existsSync } = await import("node:fs");
-    const { preparePcmForDashScope } = await import("./audio");
+    const { normalizeToDashScope, parseWavHeader } = await import("./audio");
     const { transcribePcm } = await import("./dashscope");
 
     if (!audioPath) throw new AsrError("该会议没有音频文件，无法调用 ASR");
@@ -66,9 +66,13 @@ export const dashscopeAsr: AsrAdapter = {
     if (!existsSync(resolved)) throw new AsrError("音频文件不存在", resolved);
 
     const buf = await readFile(resolved);
-    // 格式校验失败会抛出带修复建议的 AudioFormatError
-    const { pcm, info } = preparePcmForDashScope(buf);
-    const turns = await transcribePcm(pcm, info.durationMs);
+    // 自动规整成 16kHz 单声道 16bit（下混 + 重采样），不要求用户自己转
+    const info = parseWavHeader(buf);
+    const { pcm, durationMs, converted } = normalizeToDashScope(buf);
+    if (converted) {
+      console.log(`[asr] 音频已自动转换格式（原 ${info.sampleRate}Hz / ${info.channels}ch）`);
+    }
+    const turns = await transcribePcm(pcm, durationMs);
 
     if (turns.length === 0) {
       throw new AsrError("DashScope 没有返回任何识别结果（音频可能无有效语音）");
