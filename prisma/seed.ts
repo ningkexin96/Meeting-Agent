@@ -23,14 +23,42 @@ async function main() {
 
   const tenant = await prisma.tenant.create({ data: { name: "演示团队" } });
 
+  // 演示账号统一密码：demo1234（写在 README，方便面试演示）
+  const { hashPassword } = await import("../lib/auth/credentials");
+  const demoHash = await hashPassword("demo1234");
+
   const owner = await prisma.user.create({
-    data: { tenantId: tenant.id, email: "owner@demo.dev", name: "张伟（产品）", role: "owner" },
+    data: {
+      tenantId: tenant.id,
+      email: "owner@demo.dev",
+      name: "张伟（产品）",
+      role: "owner",
+      passwordHash: demoHash,
+      avatarEmoji: "🧑‍💼",
+      avatarColor: "#0d9488",
+    },
   });
   await prisma.user.create({
-    data: { tenantId: tenant.id, email: "member@demo.dev", name: "李娜（前端）", role: "member" },
+    data: {
+      tenantId: tenant.id,
+      email: "member@demo.dev",
+      name: "李娜（前端）",
+      role: "member",
+      passwordHash: demoHash,
+      avatarEmoji: "👩‍💻",
+      avatarColor: "#7c3aed",
+    },
   });
   await prisma.user.create({
-    data: { tenantId: tenant.id, email: "viewer@demo.dev", name: "王强（后端）", role: "viewer" },
+    data: {
+      tenantId: tenant.id,
+      email: "viewer@demo.dev",
+      name: "王强（后端）",
+      role: "viewer",
+      passwordHash: demoHash,
+      avatarEmoji: "👨‍💻",
+      avatarColor: "#0891b2",
+    },
   });
 
   // 主会议：未处理，等待演示流程

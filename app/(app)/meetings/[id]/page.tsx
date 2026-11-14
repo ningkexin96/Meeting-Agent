@@ -10,7 +10,7 @@ import { MinutesView } from "@/components/minutes-view";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { LoginPanel } from "@/components/login-panel";
+
 import { ModeBanner } from "@/components/mode-banner";
 import { getAsrModeInfo } from "@/lib/asr/mode";
 
@@ -29,7 +29,7 @@ const STATUS_META: Record<string, { label: string; variant: "success" | "warning
 
 export default async function MeetingPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
-  if (!session) return <LoginPanel />;
+  if (!session) return null; // 登录页由 (app)/layout.tsx 统一渲染
   const { id } = await params;
 
   const meeting = await prisma.meeting.findFirst({

@@ -1,9 +1,13 @@
-// 会话（MVP：cookie 存 email，seed 用户免密登录）
-// 对应 issue #4 —— 第 0 层：身份
-import { cookies } from "next/headers";
-import { prisma } from "@/lib/db/client";
+// 会话 —— 第 0 层：身份
+//
+// 改造说明：原实现把 email 直接放在 cookie 里，等于任何人手改 cookie
+// 就能变成别的用户。现在 cookie 存随机 token，库里存 sha256(token)，
+// 校验要走数据库，登出/禁用能真正失效。
 
-export const SESSION_COOKIE = "ma_user";
+import { cookies } from "next/headers";
+import { resolveSession, SESSION_COOKIE } from "./credentials";
+
+export { SESSION_COOKIE };
 
 export type Session = {
   userId: string;
@@ -11,20 +15,24 @@ export type Session = {
   role: string;
   name: string;
   email: string;
+  avatarEmoji: string;
+  avatarColor: string;
 };
 
 export async function getSession(): Promise<Session | null> {
   const store = await cookies();
-  const email = store.get(SESSION_COOKIE)?.value;
-  if (!email) return null;
-  const user = await prisma.user.findUnique({ where: { email } });
+  const token = store.get(SESSION_COOKIE)?.value;
+  const user = await resolveSession(token);
   if (!user) return null;
+
   return {
     userId: user.id,
     tenantId: user.tenantId,
     role: user.role,
     name: user.name,
     email: user.email,
+    avatarEmoji: user.avatarEmoji,
+    avatarColor: user.avatarColor,
   };
 }
 
