@@ -30,7 +30,8 @@
     "start:next": "next start -p 3210",
     "e2e:realtime": "node scripts/e2e-realtime.mjs",
     "e2e:skills": "node scripts/e2e-skills.mjs",
-    "e2e:diarization": "node scripts/e2e-diarization.mjs"
+    "e2e:diarization": "node scripts/e2e-diarization.mjs",
+    "test:ws-audio": "tsx scripts/test-ws-audio.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",
