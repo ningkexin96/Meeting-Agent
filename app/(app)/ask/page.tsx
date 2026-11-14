@@ -1,13 +1,13 @@
 import { AskForm } from "@/components/ask-form";
 import { getSession } from "@/lib/auth/session";
-import { LoginPanel } from "@/components/login-panel";
+
 import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
 export default async function AskPage() {
   const session = await getSession();
-  if (!session) return <LoginPanel />;
+  if (!session) return null; // 登录页由 (app)/layout.tsx 统一渲染
 
   return (
     <div className="space-y-4">

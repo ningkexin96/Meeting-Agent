@@ -1,6 +1,6 @@
 import { VoiceprintPanel } from "@/components/voiceprint-panel";
 import { getSession } from "@/lib/auth/session";
-import { LoginPanel } from "@/components/login-panel";
+
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Info } from "lucide-react";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function VoiceprintsPage() {
   const session = await getSession();
-  if (!session) return <LoginPanel />;
+  if (!session) return null; // 登录页由 (app)/layout.tsx 统一渲染
   const canEdit = session.role === "owner" || session.role === "member";
 
   return (

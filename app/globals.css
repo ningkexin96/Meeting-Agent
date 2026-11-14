@@ -133,3 +133,177 @@
     }
   }
 }
+
+/* ===== 登录页视觉 —— 对齐 Miniclaw landing ===== */
+
+/* 极光背景：四个模糊色块缓慢漂移，营造纵深 */
+.auth-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  filter: blur(100px) saturate(1.5);
+}
+
+.auth-aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.5;
+  will-change: transform;
+}
+
+.auth-aurora-blob-1 {
+  width: 520px;
+  height: 520px;
+  left: -8%;
+  top: -12%;
+  background: radial-gradient(circle at 30% 30%, #14b8a6, transparent 70%);
+  animation: auth-drift-1 26s ease-in-out infinite;
+}
+
+.auth-aurora-blob-2 {
+  width: 460px;
+  height: 460px;
+  right: -10%;
+  top: 4%;
+  background: radial-gradient(circle at 60% 40%, #0ea5e9, transparent 70%);
+  animation: auth-drift-2 32s ease-in-out infinite;
+}
+
+.auth-aurora-blob-3 {
+  width: 600px;
+  height: 600px;
+  left: 18%;
+  bottom: -28%;
+  background: radial-gradient(circle at 50% 50%, #6366f1, transparent 70%);
+  animation: auth-drift-3 38s ease-in-out infinite;
+}
+
+.auth-aurora-blob-4 {
+  width: 380px;
+  height: 380px;
+  right: 12%;
+  bottom: -12%;
+  background: radial-gradient(circle at 50% 50%, #10b981, transparent 70%);
+  animation: auth-drift-4 30s ease-in-out infinite;
+}
+
+@keyframes auth-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(60px, 40px) scale(1.12); }
+}
+@keyframes auth-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-50px, 70px) scale(1.08); }
+}
+@keyframes auth-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(40px, -60px) scale(1.15); }
+}
+@keyframes auth-drift-4 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-70px, -30px) scale(1.1); }
+}
+
+/* 噪点纹理，压住纯色块的塑料感 */
+.auth-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+}
+
+/* 玻璃卡片 */
+.auth-glass {
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.04),
+    0 12px 40px -12px rgb(0 0 0 / 0.14);
+}
+
+/* 渐变标题文字 */
+.auth-gradient-text {
+  background: linear-gradient(135deg, #0d9488 0%, #14b8a6 45%, #0891b2 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: auth-shimmer 6s ease-in-out infinite;
+}
+
+@keyframes auth-shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* 小徽章 */
+.auth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+/* 标签页 */
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.auth-tab {
+  padding: 6px 0;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition: all 0.18s ease;
+}
+
+.auth-tab[data-active="true"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+/* 密码强度条 */
+.auth-strength {
+  display: flex;
+  gap: 3px;
+  margin-top: 6px;
+}
+
+.auth-strength-bar {
+  height: 3px;
+  flex: 1;
+  border-radius: 2px;
+  background: var(--muted);
+  transition: background-color 0.2s ease;
+}
+
+.auth-strength-bar[data-level="1"] { background: var(--error); }
+.auth-strength-bar[data-level="2"] { background: var(--warning); }
+.auth-strength-bar[data-level="3"] { background: #22c55e; }
+.auth-strength-bar[data-level="4"] { background: var(--primary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-aurora-blob,
+  .auth-gradient-text { animation: none; }
+}
