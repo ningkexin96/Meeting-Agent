@@ -2,15 +2,17 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Plus, Upload, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
-export function NewMeetingForm({ role }: { role: string }) {
+export function NewMeetingForm() {
   const router = useRouter();
+  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-
-  const allowed = role === "owner" || role === "member";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,37 +31,41 @@ export function NewMeetingForm({ role }: { role: string }) {
     router.push(`/meetings/${data.id}`);
   }
 
-  if (!allowed) {
+  if (!open) {
     return (
-      <div className="max-w-sm text-right text-xs text-slate-500">
-        当前角色 <b>{role}</b> 无创建会议权限（对应 issue #4 第 1 层 RBAC）
-      </div>
+      <Button onClick={() => setOpen(true)}>
+        <Plus className="size-4" />
+        新建会议
+      </Button>
     );
   }
 
   return (
-    <form onSubmit={submit} className="w-full max-w-md space-y-2">
-      <input
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+    <form onSubmit={submit} className="flex flex-wrap items-center gap-1.5">
+      <Input
+        className="h-8 w-40"
         placeholder="会议标题"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
+        autoFocus
       />
-      <div className="flex gap-2">
+      <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted">
+        <Upload className="size-3.5" />
+        {file ? file.name.slice(0, 12) : "音频"}
         <input
           type="file"
           accept="audio/*"
-          className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+          className="hidden"
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         />
-        <button className="btn-primary" disabled={busy}>
-          {busy ? "上传中…" : "创建会议"}
-        </button>
-      </div>
-      <p className="text-xs text-slate-500">
-        不选音频也可以创建（会使用预置样例转写，保证演示可跑通）。
-      </p>
-      {msg && <p className="text-xs text-rose-600">{msg}</p>}
+      </label>
+      <Button size="sm" disabled={busy}>
+        {busy ? "创建中…" : "创建"}
+      </Button>
+      <Button type="button" variant="ghost" size="icon-sm" onClick={() => setOpen(false)}>
+        <X className="size-3.5" />
+      </Button>
+      {msg && <span className="text-xs text-error">{msg}</span>}
     </form>
   );
 }

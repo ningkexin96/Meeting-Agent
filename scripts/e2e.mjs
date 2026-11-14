@@ -112,7 +112,11 @@ async function main() {
   ok("纪要页面渲染成功", pageRes.status === 200);
   ok("页面包含决议分区", html.includes("决议"));
   ok("页面包含待办与风险", html.includes("待办") && html.includes("风险"));
-  ok("页面包含引用按钮", html.includes("#引用"));
+  // UI 改版后引用按钮改为悬停显示（默认 opacity-0），仍渲染在 HTML 中
+  ok(
+    "页面包含引用按钮",
+    html.includes("引用") && (html.includes("turn-") || html.includes("查看对应的原话")),
+  );
   ok("页面包含转写气泡", html.includes("原始转写"));
 
   console.log("== 7. 跨会议追问 ==");
