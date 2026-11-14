@@ -23,17 +23,25 @@ model Tenant {
 }
 
 model User {
-  id           String   @id @default(cuid())
-  tenantId     String
-  email        String   @unique
-  name         String
-  role         String // owner | member | viewer
-  voiceprintId String?
-  createdAt    DateTime @default(now())
+  id             String    @id @default(cuid())
+  tenantId       String
+  email          String    @unique
+  name           String
+  role           String // owner | member | viewer
+  // 认证字段（对齐 Miniclaw）：bcrypt 哈希，不存明文
+  passwordHash   String
+  avatarEmoji    String?   @default("👤")
+  avatarColor    String?   @default("#0d9488")
+  status         String    @default("active") // active | disabled
+  lastLoginAt    DateTime?
+  voiceprintId   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   tenant       Tenant               @relation(fields: [tenantId], references: [id])
   participations MeetingParticipant[]
   voiceprints  Voiceprint[]
+  sessions     Session[]
 
   @@index([tenantId])
 }
@@ -313,4 +321,16 @@ model AuditLog {
   meeting Meeting? @relation(fields: [meetingId], references: [id])
 
   @@index([tenantId])
+}
+
+// 登录会话 —— cookie 里存随机 token，库里存其 sha256
+model Session {
+  id        String   @id // sha256(token)
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

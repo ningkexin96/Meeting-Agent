@@ -23,7 +23,7 @@ async function login(email) {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ email, password: "demo1234" }),
   });
   return cookieFrom(res);
 }
@@ -48,7 +48,7 @@ if (asrProbe?.ok) {
 console.log("== 1. 登录与 RBAC ==");
   const ownerCookie = await login("owner@demo.dev");
   const viewerCookie = await login("viewer@demo.dev");
-  ok("owner 登录成功", ownerCookie.includes("ma_user="));
+  ok("owner 登录成功", ownerCookie.includes("ma_session="));
 
   console.log("== 2. viewer 不能创建会议（第 1 层 RBAC） ==");
   const fd = new FormData();

@@ -10,7 +10,7 @@ import {
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/client";
 import { NewMeetingForm } from "@/components/new-meeting-form";
-import { LoginPanel } from "@/components/login-panel";
+
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -32,7 +32,7 @@ const STATUS_META: Record<string, { label: string; variant: "success" | "warning
 
 export default async function HomePage() {
   const session = await getSession();
-  if (!session) return <LoginPanel />;
+  if (!session) return null; // 登录页由 (app)/layout.tsx 统一渲染
 
   const meetings = await prisma.meeting.findMany({
     where: { tenantId: session.tenantId },
