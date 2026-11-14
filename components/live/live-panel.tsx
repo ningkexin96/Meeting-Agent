@@ -79,7 +79,27 @@ export function LivePanel({
     ]);
   }, []);
 
-  const asr = useRealtimeAsr({ meetingId, handlers: { onFinal } });
+  const onSession = useCallback((sid: string) => {
+    setSessionId(sid);
+  }, []);
+
+  const asr = useRealtimeAsr({ meetingId, handlers: { onFinal, onSession } });
+
+  // 录音期间定期拉取增量纪要（后端每攒够 4 句抽取一次）
+  useEffect(() => {
+    if (asr.state !== "recording" || !sessionId) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/live?sessionId=${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data.items)) setItems(data.items);
+      } catch {
+        /* 网络抖动忽略 */
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [asr.state, sessionId]);
 
   // 恢复上一场会话内容
   useEffect(() => {
@@ -98,6 +118,8 @@ export function LivePanel({
   }, [lastSessionId]);
 
   const recording = asr.state === "recording";
+  // 有未结束的实时会话（含刷新后从后端恢复的），都应显示「结束」而不是「开始」
+  const activeSession = asr.state !== "recording" && asr.state !== "connecting" && !ended && Boolean(sessionId) && segments.length > 0;
   const busy = asr.state === "connecting";
   const paused = asr.state === "paused";
   // 「在录制但收不到声音」需要明确提示，否则用户只会看到数字不动
@@ -167,7 +189,7 @@ export function LivePanel({
                 : "当前为分片模式（ASR_PROVIDER 非 dashscope）"}
             </p>
           </div>
-          {recording || busy || paused ? (
+          {recording || busy || paused || activeSession ? (
             <Button onClick={end} variant="destructive" size="sm" disabled={busy}>
               <Square className="size-3.5" />
               结束并生成纪要

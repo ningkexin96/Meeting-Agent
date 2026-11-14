@@ -11,3 +11,4 @@ storage/*
 next-env.d.ts
 *.log
 scripts/pr-bodies.json
+*.tsbuildinfo
