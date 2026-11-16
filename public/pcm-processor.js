@@ -1,4 +1,4 @@
-// AudioWorklet 处理器：把麦克风浮点采样转成 16bit PCM
+// AudioWorklet 处理器：把任意来源的浮点采样转成 16bit / 16kHz 单声道 PCM
 //
 // 关键：AudioWorklet 每 128 个采样回调一次（约 8ms），单次只有 256 字节。
 // 如果每次都直接 postMessage，会变成每秒 125 个 256 字节的碎片，
@@ -6,7 +6,13 @@
 //
 // 所以这里做缓冲累积：攒够约 100ms（1600 采样 = 3200 字节）再发一次。
 // 实测修复前单帧 256 字节，修复后 3200 字节。
+//
+// 重采样：麦克风轨道用 16kHz 的 AudioContext，天然对齐；
+// 系统播放音（会议对方）用 48kHz 的 AudioContext 采集，在这里做线性插值重采样到 16kHz。
+// 会议语音对音质要求不高，线性插值足够，且不引入额外依赖、不攒延迟。
+// 不重采样的话，48kHz 数据按 16kHz 交给 ASR，语速会被拉快 3 倍、音调失真，识别率极低。
 
+const TARGET_RATE = 16000;
 const CHUNK_SAMPLES = 1600; // 100ms @ 16kHz
 
 class PCMProcessor extends AudioWorkletProcessor {
@@ -15,13 +21,21 @@ class PCMProcessor extends AudioWorkletProcessor {
     this.recording = true;
     this.buffer = new Int16Array(CHUNK_SAMPLES);
     this.offset = 0;
+    // 重采样状态：上一次的输入样本 + 读取位置
+    this.prev = 0;
+    this.pos = 0;
+    const ratio = sampleRate / TARGET_RATE;
+    this.ratio = ratio > 1.0001 ? ratio : 1;
 
     this.port.onmessage = (e) => {
       if (e.data === "stop") {
         this.recording = false;
         this.flush();
+      } else if (e.data && typeof e.data === "object" && typeof e.data.gain === "number") {
+        this.gain = e.data.gain;
       }
     };
+    this.gain = 1;
   }
 
   flush() {
@@ -34,21 +48,42 @@ class PCMProcessor extends AudioWorkletProcessor {
     }
   }
 
+  push(sample) {
+    const s = Math.max(-1, Math.min(1, sample * this.gain));
+    this.buffer[this.offset++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    if (this.offset >= CHUNK_SAMPLES) {
+      if (this.recording) this.flush();
+      else this.offset = 0;
+    }
+  }
+
   process(inputs) {
     const input = inputs[0];
     if (!input || input.length === 0) return true;
-    const channel = input[0];
-    if (!channel || channel.length === 0) return true;
 
-    for (let i = 0; i < channel.length; i++) {
-      const s = Math.max(-1, Math.min(1, channel[i]));
-      this.buffer[this.offset++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    // 多声道（如系统音是立体声）先混成单声道：取能量均值，避免只取左声道丢音
+    const ch0 = input[0];
+    if (!ch0 || ch0.length === 0) return true;
 
-      if (this.offset >= CHUNK_SAMPLES) {
-        if (this.recording) this.flush();
-        else this.offset = 0;
-      }
+    if (this.ratio === 1) {
+      for (let i = 0; i < ch0.length; i++) this.push(ch0[i]);
+      return true;
     }
+
+    // 线性插值降采样
+    const ch1 = input.length > 1 ? input[1] : null;
+    const mono = (i) => (ch1 ? (ch0[i] + ch1[i]) * 0.5 : ch0[i]);
+    let pos = this.pos;
+    while (pos < ch0.length) {
+      const i0 = Math.floor(pos);
+      const frac = pos - i0;
+      const a = i0 === 0 ? this.prev : mono(i0 - 1);
+      const b = mono(i0);
+      this.push(a + (b - a) * frac);
+      pos += this.ratio;
+    }
+    this.prev = mono(ch0.length - 1);
+    this.pos = pos - ch0.length;
     return true;
   }
 }

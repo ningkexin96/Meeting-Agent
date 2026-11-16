@@ -16,6 +16,7 @@ import {
   ShieldAlert,
   Square,
   TriangleAlert,
+  Volume2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -66,21 +67,25 @@ export function LivePanel({
   const seqRef = useRef(0);
 
   // 实时识别结果 → 本地列表
-  const onFinal = useCallback((r: { text: string; beginMs: number; endMs: number; seq?: number }) => {
-    const seq = r.seq ?? seqRef.current++;
-    setSegments((prev) => [
-      ...prev,
-      {
-        seq,
-        speakerLabel: "speaker_0",
-        startMs: r.beginMs,
-        endMs: r.endMs,
-        text: r.text,
-        confidence: 0.9,
-        needsReview: false,
-      },
-    ]);
-  }, []);
+  const onFinal = useCallback(
+    (r: { text: string; beginMs: number; endMs: number; seq?: number; speakerLabel?: string }) => {
+      const seq = r.seq ?? seqRef.current++;
+      setSegments((prev) => [
+        ...prev,
+        {
+          seq,
+          // speaker_0 = 我（麦克风），speaker_1 = 会议对方（系统播放音）
+          speakerLabel: r.speakerLabel ?? "speaker_0",
+          startMs: r.beginMs,
+          endMs: r.endMs,
+          text: r.text,
+          confidence: 0.9,
+          needsReview: false,
+        },
+      ]);
+    },
+    [],
+  );
 
   const onSession = useCallback((sid: string) => {
     setSessionId(sid);
@@ -135,6 +140,9 @@ export function LivePanel({
   const activeSession = !recording && !busy && !ended && Boolean(sessionId) && segments.length > 0;
   // 「在录制但收不到声音」需要明确提示，否则用户只会看到数字不动
   const noAudio = realtime && recording && !asr.audioAlive;
+  // 对方声音已开启但收不到任何音频，说明共享了画面却没共享音频
+  const systemOn = realtime ? asr.systemOn : recorder.systemOn;
+  const noSystemAudio = realtime && recording && asr.systemOn && !asr.audio.systemAlive;
   const activeError = realtime ? asr.error : recorder.error;
 
   async function start() {
@@ -234,15 +242,35 @@ export function LivePanel({
             </CardTitle>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {realtime
-                ? "麦克风 → 16kHz PCM → DashScope 实时识别，边说边出字"
+                ? "麦克风（我）+ 系统播放音（对方）→ 16kHz PCM → DashScope 实时识别，边说边出字"
                 : "当前为分片模式（ASR_PROVIDER 非 dashscope）"}
             </p>
           </div>
           {recording || ending || paused || activeSession ? (
-            <Button onClick={end} variant="destructive" size="sm" disabled={ending}>
-              <Square className="size-3.5" />
-              {ending ? "正在结束…" : "结束并生成纪要"}
-            </Button>
+            <div className="flex items-center gap-2">
+              {recording && (
+                <Button
+                  onClick={() =>
+                    realtime
+                      ? asr.systemOn
+                        ? void asr.disableSystem()
+                        : void asr.enableSystem()
+                      : recorder.systemOn
+                        ? recorder.stopSystem()
+                        : void recorder.startSystem()
+                  }
+                  size="sm"
+                  variant={(realtime ? asr.systemOn : recorder.systemOn) ? "outline" : "default"}
+                >
+                  <Volume2 className="size-3.5" />
+                  {(realtime ? asr.systemOn : recorder.systemOn) ? "停止采集对方声音" : "采集对方声音"}
+                </Button>
+              )}
+              <Button onClick={end} variant="destructive" size="sm" disabled={ending}>
+                <Square className="size-3.5" />
+                {ending ? "正在结束…" : "结束并生成纪要"}
+              </Button>
+            </div>
           ) : (
             <Button onClick={start} size="sm" disabled={!canRun || busy}>
               <Mic className="size-3.5" />
@@ -287,29 +315,87 @@ export function LivePanel({
               </Button>
             </div>
           )}
+
+          {/* 会议对方声音：未开启 / 开启了却没声音 */}
+          {recording && !systemOn && (
+            <div className="flex items-start justify-between gap-2 rounded-lg bg-primary/5 px-2.5 py-2 text-xs text-muted-foreground ring-1 ring-primary/20">
+              <span className="flex items-start gap-1.5">
+                <Volume2 className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                目前只采集你的麦克风，线上会议「对方说的话」听不到。点右侧按钮，在共享弹窗里选「整个屏幕」并勾选底部「同时共享系统音频」，即可把对方声音一起转写。
+              </span>
+              <Button
+                size="xs"
+                onClick={() => void (realtime ? asr.enableSystem() : recorder.startSystem())}
+              >
+                采集对方声音
+              </Button>
+            </div>
+          )}
+          {noSystemAudio && (
+            <div className="flex items-start justify-between gap-2 rounded-lg bg-warning-bg px-2.5 py-2 text-xs text-warning">
+              <span className="flex items-start gap-1.5">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                对方声音已开启，但 3 秒内没有收到任何音频。常见原因：共享弹窗里没勾选「同时共享系统音频」、或外接耳机/声卡把声音直接送到了硬件（不走系统混音）。
+              </span>
+              <Button size="xs" variant="outline" onClick={() => void asr.enableSystem()}>
+                重新采集
+              </Button>
+            </div>
+          )}
+          {realtime && asr.systemError && (
+            <div className="rounded-lg bg-error-bg px-2.5 py-2 text-xs text-error">{asr.systemError}</div>
+          )}
+          {!realtime && recorder.systemError && (
+            <div className="rounded-lg bg-error-bg px-2.5 py-2 text-xs text-error">{recorder.systemError}</div>
+          )}
           {hint && (
             <div className="rounded-lg bg-muted px-2.5 py-2 text-xs text-muted-foreground">{hint}</div>
           )}
 
           {(recording || busy) && (
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Stat
+                icon={Mic}
+                label={realtime ? "我已转写" : "已采集"}
+                value={
+                  realtime
+                    ? `${segments.filter((s) => s.speakerLabel === "speaker_0").length} 条`
+                    : `${(recorder.elapsedMs / 1000).toFixed(1)}s`
+                }
+              />
+              <Stat
+                icon={Volume2}
+                label="对方已转写"
+                value={realtime ? `${segments.filter((s) => s.speakerLabel === "speaker_1").length} 条` : "—"}
+                danger={
+                  realtime
+                    ? asr.systemOn && segments.every((s) => s.speakerLabel !== "speaker_1")
+                    : undefined
+                }
+              />
               <Stat
                 icon={Activity}
-                label="已采集"
-                value={realtime ? `${asr.pcmSeconds.toFixed(1)}s` : `${(recorder.elapsedMs / 1000).toFixed(1)}s`}
+                label="音频时长"
+                value={realtime ? `${asr.audio.micSeconds.toFixed(1)}s` : `${(recorder.elapsedMs / 1000).toFixed(1)}s`}
               />
-              <Stat icon={Mic} label="已识别" value={String(segments.length)} />
               <Stat icon={FileText} label="纪要条目" value={String(items.length)} />
             </div>
           )}
 
-          {/* 实时中间结果：正在识别的文字 */}
-          {realtime && asr.interim && (
-            <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-2">
-              <div className="text-[10px] text-primary/70">正在识别…</div>
-              <div className="mt-0.5 text-[13px] text-muted-foreground">{asr.interim}</div>
-            </div>
-          )}
+          {/* 实时中间结果：正在识别的文字（按音源分开显示） */}
+          {realtime &&
+            ["speaker_0", "speaker_1"].map((label) => {
+              const text = asr.interims[label] ?? (label === "speaker_0" ? asr.interim : "");
+              if (!text) return null;
+              return (
+                <div key={label} className="rounded-lg border border-dashed border-primary/40 bg-primary/5 px-2.5 py-2">
+                  <div className="text-[10px] text-primary/70">
+                    正在识别{label === "speaker_1" ? "（对方）" : "（我）"}…
+                  </div>
+                  <div className="mt-0.5 text-[13px] text-muted-foreground">{text}</div>
+                </div>
+              );
+            })}
         </CardContent>
       </Card>
 
@@ -329,15 +415,34 @@ export function LivePanel({
                   开始说话后会实时出现在这里…
                 </div>
               )}
-              {segments.map((s) => (
-                <div key={s.seq} className="animate-fade-in rounded-lg bg-primary/5 px-2.5 py-2 ring-1 ring-primary/15">
-                  <div className="flex justify-between text-[11px] text-muted-foreground">
-                    <span>#{s.seq}</span>
-                    <span className="font-mono">{formatMs(s.startMs)}</span>
+              {segments.map((s) => {
+                const remote = s.speakerLabel === "speaker_1";
+                return (
+                  <div
+                    key={s.seq}
+                    className={cn(
+                      "animate-fade-in rounded-lg px-2.5 py-2 ring-1",
+                      remote ? "bg-success-bg/40 ring-success/25" : "bg-primary/5 ring-primary/15",
+                    )}
+                  >
+                    <div className="flex justify-between text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        {remote ? (
+                          <Volume2 className="size-2.5" />
+                        ) : (
+                          <Mic className="size-2.5" />
+                        )}
+                        <span className={remote ? "text-success" : "text-primary"}>
+                          {remote ? "对方" : "我"}
+                        </span>
+                        <span>#{s.seq}</span>
+                      </span>
+                      <span className="font-mono">{formatMs(s.startMs)}</span>
+                    </div>
+                    <div className="mt-0.5 text-[13px] leading-relaxed">{s.text}</div>
                   </div>
-                  <div className="mt-0.5 text-[13px] leading-relaxed">{s.text}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>

@@ -27,7 +27,13 @@ export default async function LivePage({ params }: { params: Promise<{ id: strin
   }
 
   const canRun = session.role === "owner" || session.role === "member";
-  const realtime = process.env.ASR_PROVIDER === "dashscope";
+  // 两种支持流式推流的识别服务：
+  //   dashscope —— 阿里云 Paraformer 实时 WebSocket
+  //   qwen      —— Qwen-Audio-ASR，同样走 WebSocket 推流 + 原生说话人分离
+  // 漏掉 qwen 会导致页面走旧的「分片上传」路径：界面显示在录音，
+  // 但 WebSocket 从未建立，因此一条识别结果都不会回来。
+  const asrProvider = process.env.ASR_PROVIDER ?? "mock";
+  const realtime = asrProvider === "dashscope" || asrProvider === "qwen";
   const [segCount, lastSession] = await Promise.all([
     prisma.liveSegment.count({ where: { meetingId: meeting.id } }),
     prisma.liveSession.findFirst({
