@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import { ModeBanner } from "@/components/mode-banner";
+import { DeleteMeetingButton } from "@/components/delete-meeting-button";
+import { canDeleteMeeting } from "@/lib/auth/rbac";
 import { getAsrModeInfo } from "@/lib/asr/mode";
 
 export const dynamic = "force-dynamic";
@@ -68,6 +70,14 @@ export default async function MeetingPage({ params }: { params: Promise<{ id: st
                 实时模式
               </Link>
             </Button>
+            {/* 详情页长期停留，删除入口放在这里比只在列表里更顺手 */}
+            <DeleteMeetingButton
+              meetingId={meeting.id}
+              title={meeting.title}
+              canDelete={canDeleteMeeting(session.role)}
+              variant="menu"
+              redirectTo="/"
+            />
           </div>
         }
       />

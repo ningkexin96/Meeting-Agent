@@ -10,6 +10,8 @@ import {
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/client";
 import { NewMeetingForm } from "@/components/new-meeting-form";
+import { DeleteMeetingButton } from "@/components/delete-meeting-button";
+import { canDeleteMeeting } from "@/lib/auth/rbac";
 
 import { PageHeader } from "@/components/ui/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,6 +43,7 @@ export default async function HomePage() {
   });
 
   const canCreate = session.role === "owner" || session.role === "member";
+  const canDelete = canDeleteMeeting(session.role);
   const asrMode = getAsrModeInfo();
   const doneCount = meetings.filter((m) => m.status === "done").length;
 
@@ -98,6 +101,12 @@ export default async function HomePage() {
                   <Badge variant={meta.variant} className="shrink-0">
                     {meta.label}
                   </Badge>
+                  {/* 删除按钮在整行链接内部，组件里已阻止冒泡，不会误触发跳转 */}
+                  <DeleteMeetingButton
+                    meetingId={m.id}
+                    title={m.title}
+                    canDelete={canDelete}
+                  />
                   <ArrowRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </CardContent>
               </Card>

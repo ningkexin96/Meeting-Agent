@@ -74,6 +74,18 @@ class RunBus {
     this.history.set(meetingId, []);
   }
 
+  /**
+   * 丢弃某场会议的全部订阅者与历史（issue #30）。
+   *
+   * 用在「删除会议」之前：会议删掉后，页面上还挂着的 SSE 连接会继续请求这个频道，
+   * 服务端再也找不到这个会议 → 控制台里出现一串 404。
+   * 这些 404 本身无害，但会让人误以为删除出错了，所以显式清掉。
+   */
+  drop(meetingId: string) {
+    this.listeners.delete(meetingId);
+    this.history.delete(meetingId);
+  }
+
   snapshot(meetingId: string) {
     return this.history.get(meetingId) ?? [];
   }
