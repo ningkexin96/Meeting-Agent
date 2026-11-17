@@ -121,19 +121,32 @@ export async function endSession(sessionId: string, ctx: { tenantId: string; use
 
     // 1. 本次实时会话的话轮必须追加到正式 TranscriptTurn。
     //    不能因为会议已有上传转写就跳过，否则纪要引用会指向旧话轮。
-    let participant = await prisma.meetingParticipant.findFirst({
-      where: { meetingId: session.meetingId, speakerLabel: "speaker_0" },
-    });
-    if (!participant) {
-      participant = await prisma.meetingParticipant.create({
+    //    speaker_0 = 本机麦克风（我），speaker_1 = 会议对方（系统播放音），各建一个参与者。
+    const participantOf = async (speakerLabel: string, displayName: string) => {
+      const existing = await prisma.meetingParticipant.findFirst({
+        where: { meetingId: session.meetingId, speakerLabel },
+      });
+      if (existing) return existing;
+      return prisma.meetingParticipant.create({
         data: {
           meetingId: session.meetingId,
-          displayName: "实时转写",
-          speakerLabel: "speaker_0",
+          displayName,
+          speakerLabel,
           confidence: 0.8,
         },
       });
+    };
+
+    // 只有该 speakerLabel 真的出现在话轮里才建档，避免造出空的「会议对方」
+    const usedLabels = new Set(segments.map((s) => s.speakerLabel ?? "speaker_0"));
+    const participantByLabel = new Map<string, Awaited<ReturnType<typeof participantOf>>>();
+    if (usedLabels.has("speaker_0")) {
+      participantByLabel.set("speaker_0", await participantOf("speaker_0", "实时转写（我）"));
     }
+    if (usedLabels.has("speaker_1")) {
+      participantByLabel.set("speaker_1", await participantOf("speaker_1", "会议对方"));
+    }
+    const fallbackParticipant = participantByLabel.get("speaker_0") ?? [...participantByLabel.values()][0];
 
     const existingLiveTurns = await prisma.transcriptTurn.findMany({
       where: { meetingId: session.meetingId, liveSessionId: session.id },
@@ -152,6 +165,9 @@ export async function endSession(sessionId: string, ctx: { tenantId: string; use
       let nextIdx = (maxIdx._max.idx ?? -1) + 1;
       for (const segment of segments) {
         if (turnIdxByLiveSeq.has(segment.seq)) continue;
+        const label = segment.speakerLabel ?? "speaker_0";
+        const participant = participantByLabel.get(label) ?? fallbackParticipant;
+        if (!participant) throw new Error("无法建立会议参与者，实时话轮落库失败");
         await prisma.transcriptTurn.create({
           data: {
             meetingId: session.meetingId,

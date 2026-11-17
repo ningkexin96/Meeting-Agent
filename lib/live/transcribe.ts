@@ -24,6 +24,8 @@ export type ChunkInput = {
   endMs: number;
   audio: Buffer;
   ext: string;
+  /** 这一片来自哪个音源：speaker_0 = 本机麦克风，speaker_1 = 会议对方（系统播放音） */
+  speakerLabel?: string;
 };
 
 // MediaRecorder 分片上传天然可能并发；拼接尾部必须按会话串行，不能基于同一快照重写。
@@ -151,10 +153,15 @@ async function processChunkNow(input: ChunkInput): Promise<{
     }
 
     const offset = chunkOffsetOf(input);
+    // 分片来自哪个音源由客户端上报；ASR 本身不做说话人分离，
+    // 直接按音源打标，才能区分「我说的」和「线上会议对方说的」。
+    const sourceLabel = input.speakerLabel ?? "speaker_0";
+    const tagged = turns.map((t) => ({ ...t, speakerLabel: sourceLabel }));
 
     // 取该 session 已有的最后几条，做跨片拼接
+    // 注意：只跟同一音源的历史拼接，否则会把我的尾巴接到对方的话上。
     const existing = await prisma.liveSegment.findMany({
-      where: { sessionId: input.sessionId },
+      where: { sessionId: input.sessionId, speakerLabel: sourceLabel },
       orderBy: { seq: "asc" },
     });
     const prevTurns: AsrTurn[] = existing.map((s) => ({
@@ -165,8 +172,8 @@ async function processChunkNow(input: ChunkInput): Promise<{
       confidence: s.confidence,
     }));
 
-    const stitched = stitchTurns(prevTurns, turns, offset);
-    const mergedCount = prevTurns.length + turns.length - stitched.length;
+    const stitched = stitchTurns(prevTurns, tagged, offset);
+    const mergedCount = prevTurns.length + tagged.length - stitched.length;
 
     // 若发生了合并，把被合并的旧记录删掉后重写尾部
     if (mergedCount > 0 && existing.length > 0) {
@@ -175,7 +182,7 @@ async function processChunkNow(input: ChunkInput): Promise<{
       });
     }
 
-    const startIdx = mergedCount > 0 ? stitched.length - turns.length : existing.length;
+    const startIdx = mergedCount > 0 ? stitched.length - tagged.length : existing.length;
     const toWrite = stitched.slice(startIdx);
 
     let added = 0;

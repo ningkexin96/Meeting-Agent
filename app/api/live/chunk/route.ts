@@ -19,6 +19,9 @@ export async function POST(req: Request) {
   const seq = Number(form.get("seq") ?? -1);
   const startMs = Number(form.get("startMs") ?? 0);
   const endMs = Number(form.get("endMs") ?? 0);
+  // 音源：mic = 本机麦克风（我，speaker_0），system = 系统播放音（会议对方，speaker_1）
+  const rawSource = String(form.get("source") ?? "mic");
+  const speakerLabel = rawSource === "system" ? "speaker_1" : "speaker_0";
   const audio = form.get("audio");
 
   if (!sessionId) return NextResponse.json({ error: "缺少 sessionId" }, { status: 400 });
@@ -53,6 +56,7 @@ export async function POST(req: Request) {
     endMs,
     audio: buffer,
     ext,
+    speakerLabel,
   });
 
   // 每片处理完尝试抽一次增量（内部会判断窗口是否够）

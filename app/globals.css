@@ -134,6 +134,224 @@
   }
 }
 
+/* ===== 会中提问：页面上唯一的深色表面 =====
+   设计意图：全站都是白底浅灰的克制风格，这里用一次强烈的材质反差
+   把"对话"和"阅读"分开——提问框是唯一需要用户主动进入的动作。
+   深青墨色与主色 teal 同色系，不是外来色。 */
+.ask-surface {
+  /* 深色面兜底文字色：避免未显式指定颜色的元素继承全站深色前景，
+     在深色背景上变成"黑字黑底"（实测踩过：text-white/78 不是合法的透明度语法，
+     该样式被静默丢弃，文字回落到 rgb(15,23,41)） */
+  color: rgba(255, 255, 255, 0.9);
+  background:
+    radial-gradient(130% 90% at 12% -10%, rgba(20, 184, 166, 0.16) 0%, transparent 55%),
+    radial-gradient(100% 80% at 92% 108%, rgba(13, 148, 136, 0.14) 0%, transparent 60%),
+    linear-gradient(165deg, #0c2a27 0%, #0a2321 48%, #071a19 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 18px 40px -20px rgba(6, 32, 30, 0.55),
+    0 2px 8px -2px rgba(6, 32, 30, 0.25);
+}
+
+/* 同心弧：暗示声波/录音的领域意象，只做背景，不承载信息 */
+.ask-rings {
+  background-image: repeating-radial-gradient(
+    circle at 88% -18%,
+    rgba(255, 255, 255, 0.045) 0 1px,
+    transparent 1px 64px
+  );
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), transparent 70%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), transparent 70%);
+}
+
+.ask-mark {
+  background: linear-gradient(150deg, rgba(45, 212, 191, 0.28), rgba(13, 148, 136, 0.16));
+  color: #5eead4;
+  box-shadow:
+    0 0 0 1px rgba(94, 234, 212, 0.2),
+    0 6px 16px -8px rgba(45, 212, 191, 0.5);
+}
+
+/* 输入容器：默认低调，聚焦时透出青绿微光——这是对用户操作的回应，不是装饰动画 */
+.ask-field {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.09) inset;
+  transition:
+    box-shadow 0.22s ease,
+    background-color 0.22s ease;
+}
+.ask-field:focus-within {
+  background: rgba(255, 255, 255, 0.065);
+  box-shadow:
+    0 0 0 1px rgba(94, 234, 212, 0.5) inset,
+    0 0 0 4px rgba(45, 212, 191, 0.09),
+    0 8px 28px -14px rgba(45, 212, 191, 0.55);
+}
+
+.ask-input {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  resize: none;
+  padding: 12px 12px 4px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.94);
+  caret-color: #5eead4;
+}
+.ask-input::placeholder {
+  /* 占位提示要能看清：太暗等于没有提示 */
+  color: rgba(255, 255, 255, 0.46);
+}
+.ask-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 主操作：提问。整块深色里唯一的高饱和面 */
+.ask-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px 0 16px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: #04211f;
+  background: linear-gradient(180deg, #5eead4 0%, #2dd4bf 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.35) inset,
+    0 6px 18px -8px rgba(45, 212, 191, 0.75);
+  transition:
+    transform 0.12s ease,
+    filter 0.18s ease,
+    opacity 0.18s ease;
+}
+.ask-send:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.ask-send:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ask-send:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+  box-shadow: none;
+}
+.ask-send:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.75);
+  outline-offset: 2px;
+}
+
+/* 次操作：停止 */
+.ask-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+  transition: color 0.18s ease, box-shadow 0.18s ease;
+}
+.ask-stop:hover {
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.34) inset;
+}
+
+/* 快捷问法 */
+.ask-chip {
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.62);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.11) inset;
+  transition:
+    color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.ask-chip:hover:not(:disabled) {
+  color: #5eead4;
+  background: rgba(45, 212, 191, 0.09);
+  box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.35) inset;
+}
+.ask-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ask-chip:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.6);
+  outline-offset: 1px;
+}
+
+/* 一条问答 */
+.ask-turn {
+  border-radius: 12px;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07) inset;
+  animation: fade-in 0.2s ease-out;
+}
+
+.ask-cite {
+  border-radius: 8px;
+  padding: 6px 9px;
+  background: rgba(0, 0, 0, 0.22);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+}
+
+/* 流式光标 */
+.ask-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: #5eead4;
+  animation: pulseDot 1.1s ease-in-out infinite;
+}
+
+/* 深色面上的次级按钮 */
+.ask-quiet {
+  color: rgba(255, 255, 255, 0.5);
+  transition: color 0.16s ease, background-color 0.16s ease;
+}
+.ask-quiet:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.07);
+}
+.ask-quiet:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ask-quiet:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.6);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-field,
+  .ask-send,
+  .ask-chip,
+  .ask-quiet {
+    transition: none;
+  }
+  .ask-turn {
+    animation: none;
+  }
+  .ask-caret {
+    animation: none;
+  }
+}
+
 /* ===== 登录页视觉 —— 对齐 Miniclaw landing ===== */
 
 /* 极光背景：四个模糊色块缓慢漂移，营造纵深 */

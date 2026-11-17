@@ -32,6 +32,12 @@
 | 23 | 声纹与说话人聚类 | backlog | ✅ 已实现 | `lib/voice/*` `app/api/voiceprints` | `test:voice` 18 项 + `e2e:voice` 20 项 |
 | 25 | 语义检索 | backlog | ✅ 已实现 | `lib/rag/*` | `test:rag` 16 项 |
 | 26 | 实时流式转写与增量纪要 | backlog（原 #22 实时分支） | ✅ 已实现 | `lib/live/*` `components/live/*` | `test:live` 23 项 + `e2e:live` 24 项 |
+| 27 | 会议中实时提问（会中问答） | backlog | ✅ 已实现 | `lib/live/qa-core.ts` `lib/live/qa.ts` `app/api/live/ask` `components/live/live-ask-panel.tsx` | `test:live-qa` 59 项 |
+| 28 | 会中提问接入往期会议记忆 | backlog | ✅ 已实现 | `lib/live/qa-core.ts#rankMemories` `lib/live/qa.ts#loadMemoryPool` | `test:live-qa` A7/B3 组 |
+| 29 | 会中回答改为流式输出 | backlog | ✅ 已实现 | `lib/llm.ts#streamText` `lib/live/qa.ts#streamAnswer` `app/api/live/ask` | `test:live-qa` B3 组流式断言 + 探针脚本 |
+| 30 | 删除会议 | backlog | ✅ 已实现 | `lib/meeting/delete.ts` `app/api/meetings/[id]/route.ts` `components/delete-meeting-button.tsx` | `test:meeting-delete` 24 项 |
+| 31 | 概括类问法被误判为查不到 | bug | ✅ 已修复 | `lib/live/qa-core.ts#isMetaSummaryQuery` `SUMMARY_RULES` | `test:live-qa` A8 组 16 项 |
+| 32 | 按说话人提问被答成找不到 | bug | ✅ 已修复 | `lib/live/qa-core.ts#parseSpeakerQuery` `lib/live/qa.ts#loadSpeakerNames` | `test:live-qa` A9 组 18 项 |
 
 三份详细 issue 正文在 [`docs/issues/`](docs/issues/)。
 
@@ -50,6 +56,7 @@
 | 声纹端到端 | `pnpm e2e:voice` | 20 | 注册 → 会议聚类 → 删除 |
 | 实时流单元 | `pnpm test:live` | 23 | 跨片拼接、去重、规则抽取 |
 | 实时流端到端 | `pnpm e2e:live` | 24 | 分片上传 → 实时 SSE → 增量纪要 → 结束合并 |
+| 会中提问 | `pnpm test:live-qa` | 59 | 问句分词、检索排序、候选合并、上下文预算、兜底回答、鉴权/权限/租户隔离/端到端问答 |
 | 后端冒烟 | `pnpm smoke` | 1 | 不启动 UI 的纯链路 |
 
 一次跑全部：
