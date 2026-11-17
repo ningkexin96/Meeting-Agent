@@ -104,3 +104,120 @@ export async function completeText(
     .map((c) => c.text ?? "")
     .join("");
 }
+
+/**
+ * 流式增量事件的统一形状（issue #29）。
+ *
+ * 刻意不暴露 pi-ai 自己的 AssistantMessageEvent：这个类型里有 toolcall、thinking 等
+ * 本项目用不到的字段，暴露出去会让调用方被迫关心 SDK 细节。
+ * 这里只保留三种：文本增量 / 结束 / 出错。
+ */
+export type StreamChunk =
+  | { type: "delta"; text: string }
+  | { type: "done"; text: string }
+  | { type: "error"; message: string };
+
+type RawStream = AsyncIterable<{
+  type: string;
+  delta?: string;
+  content?: string;
+  partial?: { content?: { type: string; text?: string }[] };
+  error?: { message?: string };
+}>;
+
+/**
+ * 真实模型流式补全。
+ *
+ * 三个约束，都是会中问答场景的真实需求：
+ * 1. **可以中途放弃**：用户看到答案不对就想换问题，信号一断上游请求必须真的停止，
+ *    否则模型仍在计费、连接一直挂着。
+ * 2. **首字超时**：只看整体超时不够。上游如果先返回 200 再长时间不吐内容，
+ *    用户会盯着一个不动的光标。这里用「整体超时 + 首字超时」双保险。
+ * 3. **完整文本要能拿到**：流式只是展示方式的改变，调用方仍然需要完整答案
+ *    去写审计、做兜底判断，所以 done 事件也带上全文。
+ */
+export async function* streamText(
+  prompt: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number; firstTokenMs?: number } = {},
+): AsyncGenerator<StreamChunk> {
+  const timeoutMs = opts.timeoutMs ?? Number(process.env.LLM_TIMEOUT_MS ?? 120_000);
+  const firstTokenMs = opts.firstTokenMs ?? Number(process.env.LLM_FIRST_TOKEN_MS ?? 15_000);
+
+  const controller = new AbortController();
+  const abortWith = (reason: Error) => {
+    if (!controller.signal.aborted) controller.abort(reason);
+  };
+
+  // 外部信号（用户取消 / 客户端断开）透传给上游
+  const onExternalAbort = () => abortWith(new Error("已取消"));
+  opts.signal?.addEventListener("abort", onExternalAbort, { once: true });
+
+  const totalTimer = setTimeout(
+    () => abortWith(new Error(`模型调用超时（${timeoutMs}ms）`)),
+    timeoutMs,
+  );
+  let firstTimer: ReturnType<typeof setTimeout> | null = setTimeout(
+    () => abortWith(new Error(`模型 ${firstTokenMs}ms 内没有返回任何内容`)),
+    firstTokenMs,
+  );
+
+  let text = "";
+  let finished = false;
+
+  try {
+    const models = await getModels();
+    const model = await getModel();
+
+    const stream = models.streamSimple(
+      model,
+      { messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
+      { signal: controller.signal, timeoutMs, maxRetries: 0 },
+    ) as RawStream;
+
+    for await (const ev of stream) {
+      if (ev.type === "text_delta" && ev.delta) {
+        // 首个增量到达：撤掉首字超时
+        if (firstTimer) {
+          clearTimeout(firstTimer);
+          firstTimer = null;
+        }
+        text += ev.delta;
+        yield { type: "delta", text: ev.delta };
+        continue;
+      }
+      if (ev.type === "error") {
+        throw new Error(ev.error?.message || "模型返回错误");
+      }
+      if (ev.type === "done") {
+        // 极端情况：上游只发 done、不发任何 text_delta（例如被截断），
+        // 这时从 partial 里兜底取一次全文，避免"什么都没输出"
+        if (!text) {
+          text = (ev.partial?.content ?? [])
+            .filter((c) => c.type === "text")
+            .map((c) => c.text ?? "")
+            .join("");
+          if (text) yield { type: "delta", text };
+        }
+        finished = true;
+        break;
+      }
+    }
+
+    if (!text.trim()) throw new Error("模型返回了空内容");
+    yield { type: "done", text };
+  } catch (e) {
+    // 中止时优先报告中止原因（超时/取消），而不是底层抛出的 "aborted"
+    const reason = controller.signal.aborted
+      ? ((controller.signal.reason as Error)?.message ?? "已取消")
+      : finished
+        ? (e as Error).message
+        : (e as Error).message;
+    yield { type: "error", message: reason };
+  } finally {
+    clearTimeout(totalTimer);
+    if (firstTimer) clearTimeout(firstTimer);
+    opts.signal?.removeEventListener("abort", onExternalAbort);
+    // 无论正常结束还是中途退出，都必须关掉上游，否则连接会泄漏
+    abortWith(new Error("结束"));
+  }
+}

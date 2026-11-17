@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useRealtimeAsr } from "./use-realtime-asr";
 import { useLiveRecorder } from "./use-live-recorder";
+import { LiveAskPanel } from "./live-ask-panel";
 import { cn, formatMs } from "@/lib/utils";
 
 type Segment = {
@@ -213,6 +214,33 @@ export function LivePanel({
   const actions = items.filter((i) => i.kind === "action_item");
   const risks = items.filter((i) => i.kind === "risk");
 
+  // 会中提问的数据源：已落库的定稿片段 + 两路正在识别的中间结果。
+  // interim 单独作为「识别中」的片段传下去，服务端会把它当未定稿内容处理，
+  // 这样用户问「刚才说了什么」时能覆盖到还没来得及落库的最后一句。
+  const qaFeed = [
+    ...segments.map((s) => ({
+      seq: s.seq as number | null,
+      speakerLabel: s.speakerLabel,
+      startMs: s.startMs,
+      text: s.text,
+      interim: false,
+    })),
+    ...(realtime
+      ? Object.entries(asr.interims)
+          .filter(([label, text]) => Boolean(text) && !label.startsWith("_"))
+          .map(([label, text]) => {
+            const last = [...segments].reverse().find((s) => s.speakerLabel === label);
+            return {
+              seq: null,
+              speakerLabel: label,
+              startMs: last ? last.endMs : 0,
+              text,
+              interim: true,
+            };
+          })
+      : []),
+  ];
+
   return (
     <div className="space-y-4">
       <Card>
@@ -399,7 +427,10 @@ export function LivePanel({
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      {/* 左边看转写，右边直接问：把提问从页面底部提到工作流里，
+          这样"看到一句 → 立刻追问"不用来回滚屏 */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="space-y-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-sm">
@@ -468,6 +499,15 @@ export function LivePanel({
             </div>
           </CardContent>
         </Card>
+        </div>
+
+        {/* 会中提问：与转写并排，随时可问，不必等会议结束 */}
+        <LiveAskPanel
+          sessionId={sessionId}
+          meetingId={meetingId}
+          feed={qaFeed}
+          canAsk={canRun}
+        />
       </div>
 
       {ended && (
@@ -475,6 +515,10 @@ export function LivePanel({
           实时会议已结束，纪要已合并到会议详情页。
         </div>
       )}
+
+      <div className="text-[11px] leading-relaxed text-muted-foreground">
+        回答只依据左侧转写与往期记忆，两者都没有的会明确说「没找到」。
+      </div>
     </div>
   );
 }
