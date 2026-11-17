@@ -23,7 +23,7 @@
     "e2e:voice": "node scripts/e2e-voice.mjs",
     "e2e:live": "node scripts/e2e-live.mjs",
     "e2e:real": "node scripts/e2e-real-llm.mjs",
-    "test:all": "pnpm test:asr && pnpm test:voice && pnpm test:rag && pnpm test:live && pnpm test:llm && pnpm test:incremental && pnpm test:live-edge",
+    "test:all": "pnpm test:asr && pnpm test:voice && pnpm test:rag && pnpm test:live && pnpm test:llm && pnpm test:incremental && pnpm test:live-edge && pnpm test:live-qa",
     "fake:asr": "node scripts/fake-asr-server.mjs",
     "fake:live-asr": "node scripts/fake-live-asr.mjs",
     "demo:live": "node scripts/demo-live-session.mjs",
@@ -37,8 +37,10 @@
     "test:incremental": "tsx scripts/test-incremental-unit.ts",
     "test:live-e2e": "tsx scripts/test-live-e2e.ts",
     "test:live-edge": "tsx scripts/test-live-edge.ts",
+    "test:live-qa": "tsx scripts/test-live-qa.ts",
     "test:ci": "pnpm e2e && pnpm test:memory && pnpm test:live-e2e && pnpm test:speaker",
-    "test:cloud": "pnpm test:asr-cloud && pnpm test:ws-audio && pnpm e2e:realtime && pnpm e2e:diarization"
+    "test:cloud": "pnpm test:asr-cloud && pnpm test:ws-audio && pnpm e2e:realtime && pnpm e2e:diarization",
+    "test:meeting-delete": "tsx scripts/test-meeting-delete.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",
